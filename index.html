@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Zen Sanctuary - Grand Finale</title>
+    <title>Zen Sanctuary - The Reset</title>
     <style>
         body { margin: 0; background: #000; height: 100dvh; overflow: hidden; touch-action: none; position: fixed; width: 100%; }
         canvas { display: block; filter: saturate(1.2) contrast(1.1); width: 100vw; height: 100dvh; }
@@ -54,11 +54,8 @@ function getChronoTheme() {
     const circadianLume = 6 + Math.sin(dayProgress * Math.PI) * 10; 
     const baseHue = (h * 15 + (m / 60) * 15) % 360;
     
-    // Inhale logic
     const inhalePower = s >= 54 ? (s - 54 + ms/1000) / 6 : 0;
     const isExhale = s < 2 && lastMin !== -1;
-    
-    // THE GRAND FINALE TRIGGER: 5 seconds before the hour ends
     const isHourFinale = m === 59 && s >= 55;
 
     return {
@@ -77,23 +74,25 @@ function loop() {
     const cy = window.innerHeight / 2;
     const maxScreenDist = Math.sqrt(cx*cx + cy*cy);
 
-    ctx.fillStyle = theme.bg; ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    // Dynamic Wipe: If coreFlash is very high (The Crash), the background briefly whites out
+    if (coreFlash > 4.5) ctx.fillStyle = "#fff";
+    else ctx.fillStyle = theme.bg;
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 
-    // Standard Transitions
     if (theme.m !== lastMin) { 
         coreFlash = 2.5; 
         ripples.push({ r: 5, a: 1.5, isHour: false, v: baseSize * 0.003 }); 
         lastMin = theme.m;
     }
     
-    // HOUR FINALE RIPPLE: Fire exactly once at 59:55
+    // Fire Hour Finale Scan exactly once
     if (theme.isHourFinale && !ripples.some(r => r.isHour)) {
         ripples.push({ 
             r: 5, 
             a: 2.5, 
             isHour: true, 
             reflected: false, 
-            v: maxScreenDist / 120 // Timed to reach edge and back in ~4-5 secs
+            v: maxScreenDist / 125 
         });
     }
     
@@ -110,7 +109,9 @@ function loop() {
     // Rings
     minuteRings.forEach((ring, i) => {
         const ringIdx = i + 1;
-        const hasPassed = ringIdx <= theme.m || theme.m === 0;
+        // In the first minute of the hour, all rings except the first are "Zeroed"
+        const hasPassed = (theme.m === 0) ? (ringIdx === 1 && theme.s >= 0) : (ringIdx <= theme.m);
+        
         let isBeingScanned = ripples.some(r => r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.03));
         let isBeingHit = ripples.some(r => !r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.015));
         
@@ -145,7 +146,7 @@ function loop() {
         });
     });
 
-    // Ripple Physics (The Crash Logic)
+    // Ripple Physics (The Crash Reset)
     ripples.forEach((r, i) => {
         ctx.beginPath(); ctx.arc(cx, cy, r.r, 0, Math.PI * 2);
         ctx.strokeStyle = "#fff"; 
@@ -157,9 +158,10 @@ function loop() {
             if (r.isHour && r.r > maxScreenDist) r.reflected = true;
             else if (!r.isHour && r.r > maxClockRadius * 1.5) ripples.splice(i, 1);
         } else {
-            r.r -= r.v * 1.2; 
+            r.r -= r.v * 1.3; 
             if (r.r <= 10) {
-                coreFlash = 5.0; // THE CRASH IMPACT AT 00:00
+                // THE CRASH: Clear everything for the new hour
+                coreFlash = 5.0; 
                 minuteRings.forEach(ring => ring.glow = 0);
                 ripples.splice(i, 1);
             }
@@ -178,11 +180,8 @@ function loop() {
     // Time Label
     if (ghostAlpha > 0) {
         const timeStr = `${theme.h % 12 || 12}:${theme.m < 10 ? '0' + theme.m : theme.m}`;
-        ctx.save();
-        ctx.globalAlpha = ghostAlpha;
-        ctx.fillStyle = "#fff";
-        ctx.font = `300 ${baseSize * 0.07}px sans-serif`;
-        ctx.textAlign = "center";
+        ctx.save(); ctx.globalAlpha = ghostAlpha; ctx.fillStyle = "#fff";
+        ctx.font = `300 ${baseSize * 0.07}px sans-serif`; ctx.textAlign = "center";
         ctx.fillText(timeStr, cx, cy + maxClockRadius + (baseSize * 0.1));
         ctx.restore();
     }
