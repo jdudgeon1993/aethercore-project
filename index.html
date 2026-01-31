@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Zen Sanctuary - Harmonic Crash Edition</title>
+    <title>Zen Sanctuary - Grand Finale</title>
     <style>
         body { margin: 0; background: #000; height: 100dvh; overflow: hidden; touch-action: none; position: fixed; width: 100%; }
         canvas { display: block; filter: saturate(1.2) contrast(1.1); width: 100vw; height: 100dvh; }
@@ -15,7 +15,7 @@
 <script>
 const canvas = document.getElementById('zenCanvas');
 const ctx = canvas.getContext('2d');
-let w, h, dpr, ripples = [], sparks = [], lastMin = -1, lastHour = -1;
+let w, h, dpr, ripples = [], sparks = [], lastMin = -1;
 let baseSize, coreFlash = 0, ghostAlpha = 0, ghostTimer = 0, maxClockRadius = 0, minuteRings = [];
 
 function resize() {
@@ -54,8 +54,12 @@ function getChronoTheme() {
     const circadianLume = 6 + Math.sin(dayProgress * Math.PI) * 10; 
     const baseHue = (h * 15 + (m / 60) * 15) % 360;
     
+    // Inhale logic
     const inhalePower = s >= 54 ? (s - 54 + ms/1000) / 6 : 0;
     const isExhale = s < 2 && lastMin !== -1;
+    
+    // THE GRAND FINALE TRIGGER: 5 seconds before the hour ends
+    const isHourFinale = m === 59 && s >= 55;
 
     return {
         core: `hsl(${baseHue}, 90%, 75%)`,
@@ -63,7 +67,7 @@ function getChronoTheme() {
         bg: `hsl(${baseHue}, 40%, ${circadianLume}%)`, 
         glow: `hsl(${baseHue}, 50%, ${circadianLume + 10}%)`,
         spark: `hsl(${baseHue}, 100%, 90%)`,
-        inhalePower, isExhale, h, m, s
+        inhalePower, isExhale, isHourFinale, h, m, s
     };
 }
 
@@ -75,20 +79,24 @@ function loop() {
 
     ctx.fillStyle = theme.bg; ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 
-    // Minute & Hour Logic
+    // Standard Transitions
     if (theme.m !== lastMin) { 
-        const isHour = theme.h !== lastHour && lastHour !== -1;
-        coreFlash = isHour ? 5.0 : 2.5; 
+        coreFlash = 2.5; 
+        ripples.push({ r: 5, a: 1.5, isHour: false, v: baseSize * 0.003 }); 
+        lastMin = theme.m;
+    }
+    
+    // HOUR FINALE RIPPLE: Fire exactly once at 59:55
+    if (theme.isHourFinale && !ripples.some(r => r.isHour)) {
         ripples.push({ 
             r: 5, 
-            a: isHour ? 2.5 : 1.5, 
-            isHour: isHour, 
+            a: 2.5, 
+            isHour: true, 
             reflected: false, 
-            v: baseSize * (isHour ? 0.008 : 0.003) 
-        }); 
-        lastMin = theme.m;
-        lastHour = theme.h;
+            v: maxScreenDist / 120 // Timed to reach edge and back in ~4-5 secs
+        });
     }
+    
     coreFlash *= 0.96;
 
     // Time Reveal
@@ -103,8 +111,6 @@ function loop() {
     minuteRings.forEach((ring, i) => {
         const ringIdx = i + 1;
         const hasPassed = ringIdx <= theme.m || theme.m === 0;
-        
-        // Scan logic: Hour ripples ignite rings to white
         let isBeingScanned = ripples.some(r => r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.03));
         let isBeingHit = ripples.some(r => !r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.015));
         
@@ -121,29 +127,25 @@ function loop() {
 
     // Sparks
     sparks.forEach((p) => {
-        const speedMult = 1 + (theme.inhalePower * 3);
-        p.angle += p.v * speedMult;
+        p.angle += p.v * (1 + (theme.inhalePower * 3));
         let targetDist = theme.inhalePower > 0 ? 0 : baseSize * 0.22;
         if (theme.isExhale) targetDist = baseSize * 0.35;
         p.dist += (targetDist - p.dist) * (theme.inhalePower > 0 ? 0.1 : 0.04);
-
         let px = cx + Math.cos(p.angle) * p.dist;
         let py = cy + Math.sin(p.angle) * p.dist;
         p.trail.push({x: px, y: py});
         if (p.trail.length > 12) p.trail.shift();
-
         ctx.beginPath();
         p.trail.forEach((t, i) => {
-            let proximityAlpha = Math.max(0, (p.dist - 5) / 20);
-            ctx.globalAlpha = (i / p.trail.length) * 0.6 * proximityAlpha;
+            let pAlpha = Math.max(0, (p.dist - 5) / 20);
+            ctx.globalAlpha = (i / p.trail.length) * 0.6 * pAlpha;
             ctx.fillStyle = theme.spark;
-            let scale = Math.max(0.1, p.dist / (baseSize * 0.22));
-            ctx.arc(t.x, t.y, p.size * scale * (i/p.trail.length), 0, 7);
+            ctx.arc(t.x, t.y, p.size * (p.dist/(baseSize*0.22)) * (i/p.trail.length), 0, 7);
             ctx.fill();
         });
     });
 
-    // Harmonic Ripple (Scan & Crash)
+    // Ripple Physics (The Crash Logic)
     ripples.forEach((r, i) => {
         ctx.beginPath(); ctx.arc(cx, cy, r.r, 0, Math.PI * 2);
         ctx.strokeStyle = "#fff"; 
@@ -155,10 +157,9 @@ function loop() {
             if (r.isHour && r.r > maxScreenDist) r.reflected = true;
             else if (!r.isHour && r.r > maxClockRadius * 1.5) ripples.splice(i, 1);
         } else {
-            r.r -= r.v * 1.5; // Crash is faster
-            if (r.r <= 0) {
-                // THE CRASH IMPACT
-                coreFlash = 5.0;
+            r.r -= r.v * 1.2; 
+            if (r.r <= 10) {
+                coreFlash = 5.0; // THE CRASH IMPACT AT 00:00
                 minuteRings.forEach(ring => ring.glow = 0);
                 ripples.splice(i, 1);
             }
@@ -185,7 +186,6 @@ function loop() {
         ctx.fillText(timeStr, cx, cy + maxClockRadius + (baseSize * 0.1));
         ctx.restore();
     }
-
     requestAnimationFrame(loop);
 }
 loop();
