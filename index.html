@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Zen Sanctuary - Harmonic Crash Edition</title>
+    <style>
+        body { margin: 0; background: #000; height: 100dvh; overflow: hidden; touch-action: none; position: fixed; width: 100%; }
+        canvas { display: block; filter: saturate(1.2) contrast(1.1); width: 100vw; height: 100dvh; }
+    </style>
+</head>
+<body>
+    <canvas id="zenCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('zenCanvas');
+const ctx = canvas.getContext('2d');
+let w, h, dpr, ripples = [], sparks = [], lastMin = -1, lastHour = -1;
+let baseSize, coreFlash = 0, ghostAlpha = 0, ghostTimer = 0, maxClockRadius = 0, minuteRings = [];
+
+function resize() {
+    dpr = window.devicePixelRatio || 1;
+    w = window.innerWidth; h = window.innerHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    baseSize = Math.min(w, h);
+    maxClockRadius = baseSize * 0.38; 
+    
+    minuteRings = [];
+    const startRadius = baseSize * 0.15; 
+    for (let i = 1; i <= 60; i++) {
+        minuteRings.push({ r: startRadius + (i * (maxClockRadius - startRadius) / 60), glow: 0 });
+    }
+    
+    sparks = [];
+    for(let i=0; i<30; i++) {
+        sparks.push({
+            angle: Math.random() * Math.PI * 2,
+            dist: baseSize * 0.22,
+            size: Math.random() * 1.5 + 1,
+            v: (Math.random() * 0.008 + 0.004) * (Math.random() > 0.5 ? 1 : -1),
+            trail: []
+        });
+    }
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+function getChronoTheme() {
+    const now = new Date();
+    const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds(), ms = now.getMilliseconds();
+    const dayProgress = (h + m/60) / 24;
+    const circadianLume = 6 + Math.sin(dayProgress * Math.PI) * 10; 
+    const baseHue = (h * 15 + (m / 60) * 15) % 360;
+    
+    const inhalePower = s >= 54 ? (s - 54 + ms/1000) / 6 : 0;
+    const isExhale = s < 2 && lastMin !== -1;
+
+    return {
+        core: `hsl(${baseHue}, 90%, 75%)`,
+        ring: `hsl(${baseHue}, 60%, 50%)`,
+        bg: `hsl(${baseHue}, 40%, ${circadianLume}%)`, 
+        glow: `hsl(${baseHue}, 50%, ${circadianLume + 10}%)`,
+        spark: `hsl(${baseHue}, 100%, 90%)`,
+        inhalePower, isExhale, h, m, s
+    };
+}
+
+function loop() {
+    const theme = getChronoTheme();
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    const maxScreenDist = Math.sqrt(cx*cx + cy*cy);
+
+    ctx.fillStyle = theme.bg; ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+    // Minute & Hour Logic
+    if (theme.m !== lastMin) { 
+        const isHour = theme.h !== lastHour && lastHour !== -1;
+        coreFlash = isHour ? 5.0 : 2.5; 
+        ripples.push({ 
+            r: 5, 
+            a: isHour ? 2.5 : 1.5, 
+            isHour: isHour, 
+            reflected: false, 
+            v: baseSize * (isHour ? 0.008 : 0.003) 
+        }); 
+        lastMin = theme.m;
+        lastHour = theme.h;
+    }
+    coreFlash *= 0.96;
+
+    // Time Reveal
+    let rippleHitGhost = ripples.some(r => Math.abs(r.r - maxClockRadius) < (baseSize * 0.02));
+    if (rippleHitGhost) ghostTimer = 600;
+    if (ghostTimer > 0) { 
+        ghostTimer--; 
+        ghostAlpha = Math.min(0.7, ghostTimer / 60); 
+    } else { ghostAlpha = 0; }
+
+    // Rings
+    minuteRings.forEach((ring, i) => {
+        const ringIdx = i + 1;
+        const hasPassed = ringIdx <= theme.m || theme.m === 0;
+        
+        // Scan logic: Hour ripples ignite rings to white
+        let isBeingScanned = ripples.some(r => r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.03));
+        let isBeingHit = ripples.some(r => !r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.015));
+        
+        if (isBeingScanned) ring.glow = 2.0; 
+        if (isBeingHit) ring.glow = 1.0;
+        ring.glow *= 0.95;
+        
+        ctx.beginPath(); ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
+        ctx.strokeStyle = (ring.glow > 1.1 || (ringIdx % 15 === 0 && hasPassed)) ? "#fff" : theme.ring;
+        ctx.globalAlpha = (hasPassed ? 0.3 : 0.06) + (ring.glow * 0.4);
+        ctx.lineWidth = (isBeingScanned || isBeingHit) ? 2.5 : 0.7;
+        ctx.stroke();
+    });
+
+    // Sparks
+    sparks.forEach((p) => {
+        const speedMult = 1 + (theme.inhalePower * 3);
+        p.angle += p.v * speedMult;
+        let targetDist = theme.inhalePower > 0 ? 0 : baseSize * 0.22;
+        if (theme.isExhale) targetDist = baseSize * 0.35;
+        p.dist += (targetDist - p.dist) * (theme.inhalePower > 0 ? 0.1 : 0.04);
+
+        let px = cx + Math.cos(p.angle) * p.dist;
+        let py = cy + Math.sin(p.angle) * p.dist;
+        p.trail.push({x: px, y: py});
+        if (p.trail.length > 12) p.trail.shift();
+
+        ctx.beginPath();
+        p.trail.forEach((t, i) => {
+            let proximityAlpha = Math.max(0, (p.dist - 5) / 20);
+            ctx.globalAlpha = (i / p.trail.length) * 0.6 * proximityAlpha;
+            ctx.fillStyle = theme.spark;
+            let scale = Math.max(0.1, p.dist / (baseSize * 0.22));
+            ctx.arc(t.x, t.y, p.size * scale * (i/p.trail.length), 0, 7);
+            ctx.fill();
+        });
+    });
+
+    // Harmonic Ripple (Scan & Crash)
+    ripples.forEach((r, i) => {
+        ctx.beginPath(); ctx.arc(cx, cy, r.r, 0, Math.PI * 2);
+        ctx.strokeStyle = "#fff"; 
+        ctx.globalAlpha = r.a * 0.3 * (1 - (r.r / maxScreenDist)); 
+        ctx.stroke();
+
+        if (!r.reflected) {
+            r.r += r.v;
+            if (r.isHour && r.r > maxScreenDist) r.reflected = true;
+            else if (!r.isHour && r.r > maxClockRadius * 1.5) ripples.splice(i, 1);
+        } else {
+            r.r -= r.v * 1.5; // Crash is faster
+            if (r.r <= 0) {
+                // THE CRASH IMPACT
+                coreFlash = 5.0;
+                minuteRings.forEach(ring => ring.glow = 0);
+                ripples.splice(i, 1);
+            }
+        }
+    });
+
+    // Agent Core
+    const coreSize = baseSize * 0.1;
+    const breath = 1 + (Math.sin(Date.now()*0.002) * 0.03) - (theme.inhalePower * 0.2);
+    ctx.beginPath();
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize * 1.5 * breath);
+    g.addColorStop(0, "#fff"); g.addColorStop(0.5, theme.core); g.addColorStop(1, "transparent");
+    ctx.fillStyle = g; ctx.globalAlpha = 0.9;
+    ctx.arc(cx, cy, coreSize * 1.5 * breath, 0, 7); ctx.fill();
+
+    // Time Label
+    if (ghostAlpha > 0) {
+        const timeStr = `${theme.h % 12 || 12}:${theme.m < 10 ? '0' + theme.m : theme.m}`;
+        ctx.save();
+        ctx.globalAlpha = ghostAlpha;
+        ctx.fillStyle = "#fff";
+        ctx.font = `300 ${baseSize * 0.07}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText(timeStr, cx, cy + maxClockRadius + (baseSize * 0.1));
+        ctx.restore();
+    }
+
+    requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
