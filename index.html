@@ -2,192 +2,512 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zen Sanctuary - The Reset</title>
     <style>
-        body { margin: 0; background: #000; height: 100dvh; overflow: hidden; touch-action: none; position: fixed; width: 100%; }
-        canvas { display: block; filter: saturate(1.2) contrast(1.1); width: 100vw; height: 100dvh; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+        body { display: flex; align-items: center; justify-content: center; }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100dvh;
+            touch-action: none;
+        }
+        noscript {
+            color: #aaa; font-family: sans-serif; text-align: center;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        }
     </style>
 </head>
 <body>
-    <canvas id="zenCanvas"></canvas>
+    <canvas id="zenCanvas" role="img" aria-label="Zen Sanctuary: an ambient animated clock"></canvas>
+    <noscript>Zen Sanctuary requires JavaScript to display the ambient clock.</noscript>
 
 <script>
+(() => {
+"use strict";
+
+// ── State ──────────────────────────────────────────────────────────
 const canvas = document.getElementById('zenCanvas');
 const ctx = canvas.getContext('2d');
-let w, h, dpr, ripples = [], sparks = [], lastMin = -1;
-let baseSize, coreFlash = 0, ghostAlpha = 0, ghostTimer = 0, maxClockRadius = 0, minuteRings = [];
+const TWO_PI = Math.PI * 2;
 
+const state = {
+    w: 0, h: 0, cx: 0, cy: 0, dpr: 1,
+    baseSize: 0,
+    maxClockRadius: 0,
+    innerRadius: 0,
+    lastMin: -1,
+    lastSec: -1,
+    coreFlash: 0,
+    ghostAlpha: 0,
+    ghostTimer: 0,
+    chargeEnergy: 0,
+    lastFrameTime: 0,
+    isMobile: false,
+};
+
+let minuteRings = [];
+let sparks = [];
+let ripples = [];
+let touchRipples = [];
+
+// ── Resize ─────────────────────────────────────────────────────────
 function resize() {
-    dpr = window.devicePixelRatio || 1;
-    w = window.innerWidth; h = window.innerHeight;
-    canvas.width = w * dpr; canvas.height = h * dpr;
-    ctx.scale(dpr, dpr);
-    baseSize = Math.min(w, h);
-    maxClockRadius = baseSize * 0.38; 
-    
+    state.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    state.w = window.innerWidth;
+    state.h = window.innerHeight;
+    state.cx = state.w / 2;
+    state.cy = state.h / 2;
+    state.isMobile = state.w < 768;
+    canvas.width = state.w * state.dpr;
+    canvas.height = state.h * state.dpr;
+    ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    state.baseSize = Math.min(state.w, state.h);
+    state.innerRadius = state.baseSize * 0.08;
+    state.maxClockRadius = state.baseSize * (state.isMobile ? 0.42 : 0.40);
+
+    // Rebuild rings preserving glow state
+    const oldGlows = minuteRings.map(r => r.glow);
     minuteRings = [];
-    const startRadius = baseSize * 0.15; 
     for (let i = 1; i <= 60; i++) {
-        minuteRings.push({ r: startRadius + (i * (maxClockRadius - startRadius) / 60), glow: 0 });
+        const t = i / 60;
+        const r = state.innerRadius + t * (state.maxClockRadius - state.innerRadius);
+        minuteRings.push({ r, glow: oldGlows[i - 1] || 0 });
     }
-    
-    sparks = [];
-    for(let i=0; i<30; i++) {
-        sparks.push({
-            angle: Math.random() * Math.PI * 2,
-            dist: baseSize * 0.22,
-            size: Math.random() * 1.5 + 1,
-            v: (Math.random() * 0.008 + 0.004) * (Math.random() > 0.5 ? 1 : -1),
-            trail: []
-        });
+
+    // Rebuild sparks preserving orbital state
+    const sparkCount = state.isMobile ? 20 : 30;
+    while (sparks.length < sparkCount) {
+        sparks.push(createSpark());
     }
+    sparks.length = sparkCount;
+    sparks.forEach(p => { p.orbitRadius = state.baseSize * 0.22; });
 }
 
-window.addEventListener('resize', resize);
-resize();
-
-function getChronoTheme() {
-    const now = new Date();
-    const h = now.getHours(), m = now.getMinutes(), s = now.getSeconds(), ms = now.getMilliseconds();
-    const dayProgress = (h + m/60) / 24;
-    const circadianLume = 6 + Math.sin(dayProgress * Math.PI) * 10; 
-    const baseHue = (h * 15 + (m / 60) * 15) % 360;
-    
-    const inhalePower = s >= 54 ? (s - 54 + ms/1000) / 6 : 0;
-    const isExhale = s < 2 && lastMin !== -1;
-    const isHourFinale = m === 59 && s >= 55;
-
+function createSpark() {
     return {
-        core: `hsl(${baseHue}, 90%, 75%)`,
-        ring: `hsl(${baseHue}, 60%, 50%)`,
-        bg: `hsl(${baseHue}, 40%, ${circadianLume}%)`, 
-        glow: `hsl(${baseHue}, 50%, ${circadianLume + 10}%)`,
-        spark: `hsl(${baseHue}, 100%, 90%)`,
-        inhalePower, isExhale, isHourFinale, h, m, s
+        angle: Math.random() * TWO_PI,
+        dist: 0,
+        orbitRadius: state.baseSize * 0.22,
+        size: Math.random() * 1.5 + 0.8,
+        speed: (Math.random() * 0.008 + 0.004) * (Math.random() > 0.5 ? 1 : -1),
+        trail: [],
     };
 }
 
-function loop() {
+let resizeTimer;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 100);
+});
+resize();
+
+// ── Interaction ────────────────────────────────────────────────────
+function addTouchRipple(x, y) {
+    touchRipples.push({ x, y, r: 5, a: 1.2, v: state.baseSize * 0.004 });
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+    addTouchRipple(e.clientX, e.clientY);
+});
+
+// ── Theme ──────────────────────────────────────────────────────────
+function getChronoTheme() {
+    const now = new Date();
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const s = now.getSeconds();
+    const ms = now.getMilliseconds();
+    const secFrac = s + ms / 1000;
+    const dayProgress = (h + m / 60 + s / 3600) / 24;
+
+    // Circadian: brighter midday, darker at night
+    const circadianLume = 5 + Math.sin(dayProgress * Math.PI) * 12;
+    const baseHue = (h * 15 + (m / 60) * 15) % 360;
+
+    // Charge cycle: agent builds energy during last 8 seconds of each minute
+    const chargeStart = 52;
+    const isCharging = s >= chargeStart;
+    const chargePower = isCharging ? (secFrac - chargeStart) / (60 - chargeStart) : 0;
+    const isHourFinale = m === 59 && s >= 52;
+
+    return {
+        baseHue,
+        circadianLume,
+        core:  `hsl(${baseHue}, 90%, 75%)`,
+        ring:  `hsl(${baseHue}, 55%, 45%)`,
+        ringLit: `hsl(${baseHue}, 70%, 60%)`,
+        bg:    `hsl(${baseHue}, 35%, ${circadianLume}%)`,
+        glow:  `hsl(${baseHue}, 50%, ${circadianLume + 12}%)`,
+        spark: `hsl(${baseHue}, 100%, 90%)`,
+        quarter: `hsl(${(baseHue + 30) % 360}, 80%, 75%)`,
+        chargePower, isCharging, isHourFinale,
+        h, m, s, ms, secFrac,
+    };
+}
+
+// ── Drawing Helpers ────────────────────────────────────────────────
+function drawCircle(x, y, radius) {
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, TWO_PI);
+}
+
+// ── Main Loop ──────────────────────────────────────────────────────
+function loop(timestamp) {
+    if (!state.lastFrameTime) state.lastFrameTime = timestamp;
+    const dt = Math.min((timestamp - state.lastFrameTime) / 16.667, 3);
+    state.lastFrameTime = timestamp;
+
     const theme = getChronoTheme();
-    const cx = window.innerWidth / 2;
-    const cy = window.innerHeight / 2;
-    const maxScreenDist = Math.sqrt(cx*cx + cy*cy);
+    const { cx, cy, w, h, baseSize, maxClockRadius, innerRadius } = state;
+    const maxScreenDist = Math.sqrt(cx * cx + cy * cy);
 
-    // Dynamic Wipe: If coreFlash is very high (The Crash), the background briefly whites out
-    if (coreFlash > 4.5) ctx.fillStyle = "#fff";
-    else ctx.fillStyle = theme.bg;
-    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-
-    if (theme.m !== lastMin) { 
-        coreFlash = 2.5; 
-        ripples.push({ r: 5, a: 1.5, isHour: false, v: baseSize * 0.003 }); 
-        lastMin = theme.m;
+    // ── Background ─────────────────────────────────────────────
+    if (state.coreFlash > 4.5) {
+        ctx.fillStyle = "#fff";
+    } else {
+        const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxScreenDist);
+        bgGrad.addColorStop(0, theme.glow);
+        bgGrad.addColorStop(1, theme.bg);
+        ctx.fillStyle = bgGrad;
     }
-    
-    // Fire Hour Finale Scan exactly once
+    ctx.globalAlpha = 1;
+    ctx.fillRect(0, 0, w, h);
+
+    // ── Minute Change: Agent fires a ring ──────────────────────
+    if (theme.m !== state.lastMin && state.lastMin !== -1) {
+        state.coreFlash = 3.0;
+        ripples.push({
+            r: innerRadius,
+            a: 1.8,
+            isHour: false,
+            v: baseSize * 0.004,
+        });
+    }
+    state.lastMin = theme.m;
+
+    // ── Hour Finale Scan ───────────────────────────────────────
     if (theme.isHourFinale && !ripples.some(r => r.isHour)) {
-        ripples.push({ 
-            r: 5, 
-            a: 2.5, 
-            isHour: true, 
-            reflected: false, 
-            v: maxScreenDist / 125 
+        ripples.push({
+            r: innerRadius,
+            a: 2.5,
+            isHour: true,
+            reflected: false,
+            v: maxScreenDist / 100,
         });
     }
-    
-    coreFlash *= 0.96;
 
-    // Time Reveal
-    let rippleHitGhost = ripples.some(r => Math.abs(r.r - maxClockRadius) < (baseSize * 0.02));
-    if (rippleHitGhost) ghostTimer = 600;
-    if (ghostTimer > 0) { 
-        ghostTimer--; 
-        ghostAlpha = Math.min(0.7, ghostTimer / 60); 
-    } else { ghostAlpha = 0; }
+    // Decay flash (time-based)
+    state.coreFlash *= Math.pow(0.96, dt);
 
-    // Rings
+    // ── Charge Energy ──────────────────────────────────────────
+    const targetCharge = theme.chargePower;
+    state.chargeEnergy += (targetCharge - state.chargeEnergy) * 0.08 * dt;
+
+    // ── Ghost Time Label trigger ───────────────────────────────
+    const rippleHitGhost = ripples.some(r =>
+        Math.abs(r.r - maxClockRadius) < baseSize * 0.025
+    );
+    if (rippleHitGhost) state.ghostTimer = 500;
+    if (state.ghostTimer > 0) {
+        state.ghostTimer -= dt;
+        state.ghostAlpha = Math.min(0.65, state.ghostTimer / 50);
+    } else {
+        state.ghostAlpha *= Math.pow(0.92, dt);
+    }
+
+    // ── Rings ──────────────────────────────────────────────────
+    const currentMinute = theme.m;
+    const passedRings = currentMinute === 0 ? 0 : currentMinute;
+
     minuteRings.forEach((ring, i) => {
-        const ringIdx = i + 1;
-        // In the first minute of the hour, all rings except the first are "Zeroed"
-        const hasPassed = (theme.m === 0) ? (ringIdx === 1 && theme.s >= 0) : (ringIdx <= theme.m);
-        
-        let isBeingScanned = ripples.some(r => r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.03));
-        let isBeingHit = ripples.some(r => !r.isHour && Math.abs(r.r - ring.r) < (baseSize * 0.015));
-        
-        if (isBeingScanned) ring.glow = 2.0; 
-        if (isBeingHit) ring.glow = 1.0;
-        ring.glow *= 0.95;
-        
-        ctx.beginPath(); ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
-        ctx.strokeStyle = (ring.glow > 1.1 || (ringIdx % 15 === 0 && hasPassed)) ? "#fff" : theme.ring;
-        ctx.globalAlpha = (hasPassed ? 0.3 : 0.06) + (ring.glow * 0.4);
-        ctx.lineWidth = (isBeingScanned || isBeingHit) ? 2.5 : 0.7;
-        ctx.stroke();
-    });
+        const ringNum = i + 1;
+        const hasPassed = ringNum <= passedRings;
+        const isActive = ringNum === passedRings + 1;
+        const isQuarter = ringNum % 15 === 0;
+        const isFive = ringNum % 5 === 0;
 
-    // Sparks
-    sparks.forEach((p) => {
-        p.angle += p.v * (1 + (theme.inhalePower * 3));
-        let targetDist = theme.inhalePower > 0 ? 0 : baseSize * 0.22;
-        if (theme.isExhale) targetDist = baseSize * 0.35;
-        p.dist += (targetDist - p.dist) * (theme.inhalePower > 0 ? 0.1 : 0.04);
-        let px = cx + Math.cos(p.angle) * p.dist;
-        let py = cy + Math.sin(p.angle) * p.dist;
-        p.trail.push({x: px, y: py});
-        if (p.trail.length > 12) p.trail.shift();
-        ctx.beginPath();
-        p.trail.forEach((t, i) => {
-            let pAlpha = Math.max(0, (p.dist - 5) / 20);
-            ctx.globalAlpha = (i / p.trail.length) * 0.6 * pAlpha;
-            ctx.fillStyle = theme.spark;
-            ctx.arc(t.x, t.y, p.size * (p.dist/(baseSize*0.22)) * (i/p.trail.length), 0, 7);
-            ctx.fill();
-        });
-    });
+        // Ripple interactions
+        let isScanned = false;
+        let isHit = false;
+        for (let ri = 0; ri < ripples.length; ri++) {
+            const rp = ripples[ri];
+            const dist = Math.abs(rp.r - ring.r);
+            if (rp.isHour && dist < baseSize * 0.035) isScanned = true;
+            if (!rp.isHour && dist < baseSize * 0.018) isHit = true;
+        }
 
-    // Ripple Physics (The Crash Reset)
-    ripples.forEach((r, i) => {
-        ctx.beginPath(); ctx.arc(cx, cy, r.r, 0, Math.PI * 2);
-        ctx.strokeStyle = "#fff"; 
-        ctx.globalAlpha = r.a * 0.3 * (1 - (r.r / maxScreenDist)); 
-        ctx.stroke();
+        if (isScanned) ring.glow = 2.5;
+        if (isHit) ring.glow = Math.max(ring.glow, 1.5);
+        ring.glow *= Math.pow(0.94, dt);
 
-        if (!r.reflected) {
-            r.r += r.v;
-            if (r.isHour && r.r > maxScreenDist) r.reflected = true;
-            else if (!r.isHour && r.r > maxClockRadius * 1.5) ripples.splice(i, 1);
-        } else {
-            r.r -= r.v * 1.3; 
-            if (r.r <= 10) {
-                // THE CRASH: Clear everything for the new hour
-                coreFlash = 5.0; 
-                minuteRings.forEach(ring => ring.glow = 0);
-                ripples.splice(i, 1);
+        // Determine visual properties based on hierarchy
+        let alpha, lineW, color;
+
+        if (isActive) {
+            // Current minute: pulsing cursor
+            const pulse = 0.5 + Math.sin(timestamp * 0.004) * 0.3;
+            alpha = 0.5 + pulse * 0.4;
+            lineW = state.isMobile ? 2.5 : 3.0;
+            color = "#fff";
+        } else if (hasPassed) {
+            if (isQuarter) {
+                alpha = 0.65 + ring.glow * 0.3;
+                lineW = state.isMobile ? 2.8 : 3.5;
+                color = theme.quarter;
+            } else if (isFive) {
+                alpha = 0.45 + ring.glow * 0.3;
+                lineW = state.isMobile ? 1.8 : 2.2;
+                color = theme.ringLit;
+            } else {
+                alpha = 0.28 + ring.glow * 0.35;
+                lineW = state.isMobile ? 0.8 : 1.0;
+                color = theme.ringLit;
             }
+        } else {
+            // Future rings: barely visible
+            if (isQuarter) {
+                alpha = 0.10 + ring.glow * 0.3;
+                lineW = state.isMobile ? 1.5 : 1.8;
+                color = theme.ring;
+            } else if (isFive) {
+                alpha = 0.06 + ring.glow * 0.3;
+                lineW = state.isMobile ? 0.8 : 1.0;
+                color = theme.ring;
+            } else {
+                alpha = 0.03 + ring.glow * 0.3;
+                lineW = 0.5;
+                color = theme.ring;
+            }
+        }
+
+        // Scanned rings flash white
+        if (ring.glow > 1.2) color = "#fff";
+
+        ctx.globalAlpha = Math.min(alpha, 1);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineW;
+        drawCircle(cx, cy, ring.r);
+        ctx.stroke();
+    });
+
+    // ── Quarter Markers (12/3/6/9 ticks) ──────────────────────
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = theme.quarter;
+    ctx.lineWidth = 1;
+    for (let q = 0; q < 4; q++) {
+        const angle = (q * Math.PI / 2) - Math.PI / 2; // 12 o'clock start
+        const inner = maxClockRadius + baseSize * 0.01;
+        const outer = maxClockRadius + baseSize * 0.03;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+        ctx.lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer);
+        ctx.stroke();
+    }
+
+    // ── Sparks ─────────────────────────────────────────────────
+    sparks.forEach(p => {
+        const chargeEffect = state.chargeEnergy;
+        p.angle += p.speed * (1 + chargeEffect * 4) * dt;
+
+        // During charge, sparks pull inward toward core
+        let targetDist = p.orbitRadius;
+        if (chargeEffect > 0.01) {
+            targetDist = innerRadius * (1 - chargeEffect * 0.6);
+        }
+        p.dist += (targetDist - p.dist) * 0.05 * dt;
+
+        const px = cx + Math.cos(p.angle) * p.dist;
+        const py = cy + Math.sin(p.angle) * p.dist;
+        p.trail.push({ x: px, y: py });
+        const maxTrail = state.isMobile ? 8 : 14;
+        while (p.trail.length > maxTrail) p.trail.shift();
+
+        // Draw trail
+        const distFade = Math.max(0, Math.min(1, (p.dist - 5) / 30));
+        for (let ti = 0; ti < p.trail.length; ti++) {
+            const t = p.trail[ti];
+            const progress = (ti + 1) / p.trail.length;
+            const sz = p.size * progress * (0.3 + distFade * 0.7);
+            ctx.globalAlpha = progress * 0.55 * distFade;
+            ctx.fillStyle = theme.spark;
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, sz, 0, TWO_PI);
+            ctx.fill();
         }
     });
 
-    // Agent Core
-    const coreSize = baseSize * 0.1;
-    const breath = 1 + (Math.sin(Date.now()*0.002) * 0.03) - (theme.inhalePower * 0.2);
-    ctx.beginPath();
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize * 1.5 * breath);
-    g.addColorStop(0, "#fff"); g.addColorStop(0.5, theme.core); g.addColorStop(1, "transparent");
-    ctx.fillStyle = g; ctx.globalAlpha = 0.9;
-    ctx.arc(cx, cy, coreSize * 1.5 * breath, 0, 7); ctx.fill();
+    // ── Ripples (safe reverse iteration) ───────────────────────
+    for (let i = ripples.length - 1; i >= 0; i--) {
+        const r = ripples[i];
+        const edgeFade = 1 - r.r / maxScreenDist;
 
-    // Time Label
-    if (ghostAlpha > 0) {
-        const timeStr = `${theme.h % 12 || 12}:${theme.m < 10 ? '0' + theme.m : theme.m}`;
-        ctx.save(); ctx.globalAlpha = ghostAlpha; ctx.fillStyle = "#fff";
-        ctx.font = `300 ${baseSize * 0.07}px sans-serif`; ctx.textAlign = "center";
-        ctx.fillText(timeStr, cx, cy + maxClockRadius + (baseSize * 0.1));
+        ctx.globalAlpha = r.a * 0.35 * Math.max(0, edgeFade);
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = r.isHour ? 2 : 1.2;
+        drawCircle(cx, cy, Math.max(0, r.r));
+        ctx.stroke();
+
+        if (!r.reflected) {
+            r.r += r.v * dt;
+            if (r.isHour && r.r > maxScreenDist) {
+                r.reflected = true;
+            } else if (!r.isHour && r.r > maxClockRadius * 1.6) {
+                r.a -= 0.04 * dt;
+                if (r.a <= 0) ripples.splice(i, 1);
+            }
+        } else {
+            r.r -= r.v * 1.4 * dt;
+            if (r.r <= innerRadius * 0.5) {
+                // THE CRASH
+                state.coreFlash = 5.5;
+                minuteRings.forEach(ring => { ring.glow = 0; });
+                // Burst sparks outward
+                sparks.forEach(p => { p.dist = baseSize * 0.38; });
+                ripples.splice(i, 1);
+            }
+        }
+    }
+
+    // ── Touch Ripples (safe reverse iteration) ─────────────────
+    for (let i = touchRipples.length - 1; i >= 0; i--) {
+        const r = touchRipples[i];
+        ctx.globalAlpha = r.a * 0.3;
+        ctx.strokeStyle = theme.spark;
+        ctx.lineWidth = 1.5;
+        drawCircle(r.x, r.y, r.r);
+        ctx.stroke();
+        r.r += r.v * dt;
+        r.a -= 0.015 * dt;
+        if (r.a <= 0) touchRipples.splice(i, 1);
+    }
+
+    // ── Agent Core ─────────────────────────────────────────────
+    const coreSize = baseSize * 0.07;
+    const breathCycle = Math.sin(timestamp * 0.0015);
+    const breath = 1 + breathCycle * 0.04 - state.chargeEnergy * 0.25;
+    const coreRadius = coreSize * breath;
+
+    // Outer glow halo
+    ctx.globalAlpha = 0.15 + state.coreFlash * 0.08;
+    const haloGrad = ctx.createRadialGradient(cx, cy, coreRadius, cx, cy, coreRadius * 3);
+    haloGrad.addColorStop(0, theme.core);
+    haloGrad.addColorStop(1, "transparent");
+    ctx.fillStyle = haloGrad;
+    drawCircle(cx, cy, coreRadius * 3);
+    ctx.fill();
+
+    // Core flash (white burst on minute fire)
+    if (state.coreFlash > 0.5) {
+        ctx.globalAlpha = Math.min(0.6, state.coreFlash * 0.15);
+        const flashGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreRadius * 2.5);
+        flashGrad.addColorStop(0, "#fff");
+        flashGrad.addColorStop(1, "transparent");
+        ctx.fillStyle = flashGrad;
+        drawCircle(cx, cy, coreRadius * 2.5);
+        ctx.fill();
+    }
+
+    // Inner core
+    ctx.globalAlpha = 0.95;
+    const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreRadius * 1.3);
+    coreGrad.addColorStop(0, "#fff");
+    coreGrad.addColorStop(0.4, theme.core);
+    coreGrad.addColorStop(1, "transparent");
+    ctx.fillStyle = coreGrad;
+    drawCircle(cx, cy, coreRadius * 1.3);
+    ctx.fill();
+
+    // Charge indicator: ring tightens around core
+    if (state.chargeEnergy > 0.02) {
+        const chargeRadius = coreRadius * (1.8 - state.chargeEnergy * 0.6);
+        ctx.globalAlpha = state.chargeEnergy * 0.7;
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1 + state.chargeEnergy * 2;
+        drawCircle(cx, cy, chargeRadius);
+        ctx.stroke();
+    }
+
+    // ── Hour Marker Dots ───────────────────────────────────────
+    // 12 dots around outer edge for hour reading
+    const hourDotRadius = maxClockRadius + baseSize * 0.05;
+    const currentHour = theme.h % 12;
+    for (let hd = 0; hd < 12; hd++) {
+        const angle = (hd / 12) * TWO_PI - Math.PI / 2;
+        const hx = cx + Math.cos(angle) * hourDotRadius;
+        const hy = cy + Math.sin(angle) * hourDotRadius;
+        const isCurrentHour = hd === currentHour;
+        const isCardinal = hd % 3 === 0;
+
+        const dotSize = isCardinal
+            ? (state.isMobile ? 3.5 : 4.5)
+            : (state.isMobile ? 1.8 : 2.2);
+
+        ctx.globalAlpha = isCurrentHour ? 0.9 : (isCardinal ? 0.35 : 0.15);
+        ctx.fillStyle = isCurrentHour ? "#fff" : theme.quarter;
+        ctx.beginPath();
+        ctx.arc(hx, hy, dotSize, 0, TWO_PI);
+        ctx.fill();
+
+        // Current hour: add glow
+        if (isCurrentHour) {
+            ctx.globalAlpha = 0.25 + Math.sin(timestamp * 0.002) * 0.1;
+            const hourGlow = ctx.createRadialGradient(hx, hy, 0, hx, hy, dotSize * 4);
+            hourGlow.addColorStop(0, "#fff");
+            hourGlow.addColorStop(1, "transparent");
+            ctx.fillStyle = hourGlow;
+            ctx.beginPath();
+            ctx.arc(hx, hy, dotSize * 4, 0, TWO_PI);
+            ctx.fill();
+        }
+    }
+
+    // ── Time Ghost Label ───────────────────────────────────────
+    if (state.ghostAlpha > 0.01) {
+        const h12 = theme.h % 12 || 12;
+        const mPad = theme.m < 10 ? '0' + theme.m : '' + theme.m;
+        const ampm = theme.h < 12 ? 'am' : 'pm';
+        const timeStr = `${h12}:${mPad} ${ampm}`;
+
+        ctx.save();
+        ctx.globalAlpha = Math.min(state.ghostAlpha, 0.6);
+        ctx.fillStyle = "#fff";
+        ctx.font = `200 ${baseSize * (state.isMobile ? 0.055 : 0.05)}px system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(timeStr, cx, cy + maxClockRadius + baseSize * 0.1);
         ctx.restore();
     }
+
+    // ── Second Progress Arc ────────────────────────────────────
+    // Subtle arc around the active ring showing second progress
+    if (passedRings < 60) {
+        const activeRing = minuteRings[passedRings]; // next ring to light
+        if (activeRing) {
+            const secProgress = theme.secFrac / 60;
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + secProgress * TWO_PI;
+
+            ctx.globalAlpha = 0.2 + state.chargeEnergy * 0.3;
+            ctx.strokeStyle = theme.core;
+            ctx.lineWidth = state.isMobile ? 1.5 : 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, activeRing.r, startAngle, endAngle);
+            ctx.stroke();
+        }
+    }
+
+    // Reset alpha
+    ctx.globalAlpha = 1;
+
     requestAnimationFrame(loop);
 }
-loop();
+
+requestAnimationFrame(loop);
+
+})();
 </script>
 </body>
 </html>
