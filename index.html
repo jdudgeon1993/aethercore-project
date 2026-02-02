@@ -46,6 +46,9 @@ const state = {
     chargeEnergy: 0,
     lastFrameTime: 0,
     isMobile: false,
+    // Idle mode
+    lastInteraction: 0,   // timestamp of last touch/pointer
+    idleAmount: 0,        // 0 = active, 1 = fully idle
 };
 
 let minuteRings = [];
@@ -140,7 +143,12 @@ function addTouchRipple(x, y) {
     touchRipples.push({ x, y, r: 5, a: 1.2, v: state.baseSize * 0.004 });
 }
 
+canvas.addEventListener('pointermove', () => {
+    state.lastInteraction = performance.now();
+});
+
 canvas.addEventListener('pointerdown', (e) => {
+    state.lastInteraction = performance.now();
     const px = e.clientX;
     const py = e.clientY;
     addTouchRipple(px, py);
@@ -182,7 +190,11 @@ function getChronoTheme() {
 
     // Circadian: brighter midday, darker at night
     const circadianLume = 5 + Math.sin(dayProgress * Math.PI) * 12;
-    const baseHue = (h * 15 + (m / 60) * 15) % 360;
+    const isAM = h < 12;
+
+    // AM/PM tint: AM shifts warm (+15 hue toward amber), PM shifts cool (-15 toward blue)
+    const ampmShift = isAM ? 15 : -15;
+    const baseHue = ((h * 15 + (m / 60) * 15) + ampmShift + 360) % 360;
 
     // Charge cycle: agent builds energy during last 8 seconds of each minute
     const chargeStart = 52;
@@ -206,7 +218,7 @@ function getChronoTheme() {
         glow:  `hsl(${baseHue}, 50%, ${circadianLume + 12}%)`,
         spark: `hsl(${baseHue}, 100%, 90%)`,
         quarter: `hsl(${(baseHue + 30) % 360}, 80%, 75%)`,
-        chargePower, isCharging, isHourFinale,
+        chargePower, isCharging, isHourFinale, isAM,
         h, m, s, ms, secFrac,
     };
 }
@@ -228,9 +240,7 @@ function loop(timestamp) {
     const maxScreenDist = Math.sqrt(cx * cx + cy * cy);
 
     // ── Background ─────────────────────────────────────────────
-    if (state.coreFlash > 4.5) {
-        ctx.fillStyle = "#fff";
-    } else {
+    {
         const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxScreenDist);
         bgGrad.addColorStop(0, theme.glow);
         bgGrad.addColorStop(1, theme.bg);
@@ -238,6 +248,17 @@ function loop(timestamp) {
     }
     ctx.globalAlpha = 1;
     ctx.fillRect(0, 0, w, h);
+
+    // ── Idle Mode ────────────────────────────────────────────────
+    // After 3 minutes of no interaction, gradually enter meditation state
+    const IDLE_THRESHOLD = 180000; // 3 minutes in ms
+    const IDLE_RAMP = 30000;      // 30 seconds to fully transition
+    const timeSinceInteraction = timestamp - (state.lastInteraction || timestamp);
+    const idleTarget = timeSinceInteraction > IDLE_THRESHOLD
+        ? Math.min(1, (timeSinceInteraction - IDLE_THRESHOLD) / IDLE_RAMP)
+        : 0;
+    state.idleAmount += (idleTarget - state.idleAmount) * 0.02 * dt;
+    const idle = state.idleAmount;
 
     // ── Ambient Particle Weather (#6) ──────────────────────────
     // Background dust/motes that drift with time-of-day character:
@@ -260,8 +281,9 @@ function loop(timestamp) {
             else if (isEvening) vertDir = 1;   // settle
             else vertDir = Math.sin(wp.wobble) * 0.3; // gentle float
 
-            wp.x += (wp.drift + Math.sin(wp.wobble) * 0.4) * dt;
-            wp.y += (wp.fallSpeed * vertDir + Math.cos(wp.wobble * 0.7) * 0.15) * dt;
+            const idleSlow = 1 - idle * 0.6; // slower drift when idle
+            wp.x += (wp.drift + Math.sin(wp.wobble) * 0.4) * dt * idleSlow;
+            wp.y += (wp.fallSpeed * vertDir + Math.cos(wp.wobble * 0.7) * 0.15) * dt * idleSlow;
 
             // Charge phase: weather swirls toward center
             if (state.chargeEnergy > 0.1) {
@@ -278,8 +300,8 @@ function loop(timestamp) {
             if (wp.y < -10) wp.y = h + 10;
             if (wp.y > h + 10) wp.y = -10;
 
-            // Draw — visibility scales with circadian energy
-            ctx.globalAlpha = wp.alpha * (0.15 + nightFade * 0.85);
+            // Draw — visibility scales with circadian energy; more visible when idle
+            ctx.globalAlpha = wp.alpha * (0.15 + nightFade * 0.85) * (1 + idle * 1.5);
             ctx.fillStyle = theme.spark;
             ctx.beginPath();
             ctx.arc(wp.x, wp.y, wp.size, 0, TWO_PI);
@@ -299,14 +321,14 @@ function loop(timestamp) {
     }
     state.lastMin = theme.m;
 
-    // ── Hour Finale Scan ───────────────────────────────────────
+    // ── Hour Finale — gentle outward sweep, no crash ───────────
     if (theme.isHourFinale && !ripples.some(r => r.isHour)) {
         ripples.push({
             r: innerRadius,
-            a: 2.5,
+            a: 1.6,
             isHour: true,
             reflected: false,
-            v: maxScreenDist / 100,
+            v: baseSize * 0.006,
         });
     }
 
@@ -400,9 +422,9 @@ function loop(timestamp) {
         }
     }
 
-    // TIER 2: 5-Minute Tick Marks — the countable markers (12 total)
+    // TIER 2: 5-Minute Tick Marks with Depth — the countable markers (12 total)
     for (let tick = 1; tick <= 12; tick++) {
-        const ringIdx = tick * 5 - 1; // ring indices: 4, 9, 14, 19... (minutes 5, 10, 15...)
+        const ringIdx = tick * 5 - 1;
         const ring = minuteRings[ringIdx];
         const minuteNum = tick * 5;
         const hasPassed = minuteNum <= passedRings;
@@ -411,12 +433,10 @@ function loop(timestamp) {
         let alpha, lineW, color;
 
         if (isQuarter) {
-            // TIER 3: Quarter Walls — 15, 30, 45, 60
             alpha = hasPassed ? 0.7 : 0.18;
             lineW = state.isMobile ? 3.0 : 4.0;
             color = hasPassed ? theme.quarter : theme.ring;
         } else {
-            // Regular 5-min tick
             alpha = hasPassed ? 0.5 : 0.1;
             lineW = state.isMobile ? 1.8 : 2.2;
             color = hasPassed ? theme.ringLit : theme.ring;
@@ -426,18 +446,70 @@ function loop(timestamp) {
         alpha += ring.glow * 0.3;
         if (ring.glow > 1.2) color = "#fff";
 
+        // Idle dims the rings slightly
+        alpha *= (1 - idle * 0.4);
+
+        // ── Depth: outer shadow (dark ring slightly outside) ──
+        ctx.globalAlpha = Math.min(alpha * 0.25, 0.2);
+        ctx.strokeStyle = `hsla(${theme.baseHue}, 30%, 8%, 1)`;
+        ctx.lineWidth = lineW + (isQuarter ? 3 : 1.5);
+        drawCircle(cx, cy, ring.r + 0.5);
+        ctx.stroke();
+
+        // ── Main ring stroke ──
         ctx.globalAlpha = Math.min(alpha, 1);
         ctx.strokeStyle = color;
         ctx.lineWidth = lineW;
         drawCircle(cx, cy, ring.r);
         ctx.stroke();
+
+        // ── Depth: inner highlight (bright thin ring slightly inside) ──
+        if (hasPassed || ring.glow > 0.3) {
+            ctx.globalAlpha = Math.min(alpha * 0.35, 0.4);
+            ctx.strokeStyle = `hsla(${theme.baseHue}, 60%, 85%, 1)`;
+            ctx.lineWidth = isQuarter ? 1.0 : 0.5;
+            drawCircle(cx, cy, ring.r - lineW * 0.4);
+            ctx.stroke();
+        }
+
+        // ── Depth: soft glow bloom behind passed quarter walls ──
+        if (isQuarter && hasPassed) {
+            const glowWidth = baseSize * 0.012;
+            const qGrad = ctx.createRadialGradient(
+                cx, cy, ring.r - glowWidth,
+                cx, cy, ring.r + glowWidth
+            );
+            qGrad.addColorStop(0, 'transparent');
+            qGrad.addColorStop(0.4, `hsla(${(theme.baseHue + 30) % 360}, 80%, 70%, 0.15)`);
+            qGrad.addColorStop(0.6, `hsla(${(theme.baseHue + 30) % 360}, 80%, 70%, 0.15)`);
+            qGrad.addColorStop(1, 'transparent');
+            ctx.globalAlpha = 0.5 + ring.glow * 0.3;
+            ctx.fillStyle = qGrad;
+            ctx.beginPath();
+            ctx.arc(cx, cy, ring.r + glowWidth, 0, TWO_PI);
+            ctx.arc(cx, cy, ring.r - glowWidth, 0, TWO_PI, true);
+            ctx.fill();
+        }
     }
 
-    // Outer boundary ring — the "wall" the agent pushes toward
+    // Outer boundary ring with depth — the "wall" the agent pushes toward
+    // Shadow
+    ctx.globalAlpha = 0.04;
+    ctx.strokeStyle = `hsla(${theme.baseHue}, 30%, 5%, 1)`;
+    ctx.lineWidth = 3;
+    drawCircle(cx, cy, maxClockRadius + 1);
+    ctx.stroke();
+    // Main
     ctx.globalAlpha = 0.08;
     ctx.strokeStyle = theme.ring;
     ctx.lineWidth = 1;
     drawCircle(cx, cy, maxClockRadius);
+    ctx.stroke();
+    // Inner edge highlight
+    ctx.globalAlpha = 0.03;
+    ctx.strokeStyle = `hsla(${theme.baseHue}, 50%, 80%, 1)`;
+    ctx.lineWidth = 0.5;
+    drawCircle(cx, cy, maxClockRadius - 1);
     ctx.stroke();
 
     // ── Quarter Cardinal Ticks (12/3/6/9 outside ring field) ──
@@ -481,8 +553,9 @@ function loop(timestamp) {
 
         p.dist += (targetDist - p.dist) * 0.04 * dt;
 
-        // Speed increases with minute progress + circadian energy
-        const speedMult = (0.4 + circEnergy * 0.8) * (1 + minProgress * 1.5 + chargeEffect * 3);
+        // Speed increases with minute progress + circadian energy; slows when idle
+        const idleSpeedDamp = 1 - idle * 0.7;
+        const speedMult = (0.4 + circEnergy * 0.8) * (1 + minProgress * 1.5 + chargeEffect * 3) * idleSpeedDamp;
         p.angle += p.baseSpeed * speedMult * dt;
 
         const px = cx + Math.cos(p.angle) * p.dist;
@@ -505,9 +578,9 @@ function loop(timestamp) {
         }
         p.lastRingCross = currentRingIdx;
 
-        // Draw trail — brighter as minute progresses
+        // Draw trail — brighter as minute progresses; dimmer when idle
         const distFade = Math.max(0, Math.min(1, (p.dist - 5) / 30));
-        const baseAlpha = 0.35 + minProgress * 0.35;
+        const baseAlpha = (0.35 + minProgress * 0.35) * (1 - idle * 0.5);
         for (let ti = 0; ti < p.trail.length; ti++) {
             const t = p.trail[ti];
             const progress = (ti + 1) / p.trail.length;
@@ -531,27 +604,34 @@ function loop(timestamp) {
         drawCircle(cx, cy, Math.max(0, r.r));
         ctx.stroke();
 
-        if (!r.reflected) {
-            r.r += r.v * dt;
-            if (r.isHour && r.r > maxScreenDist) {
-                r.reflected = true;
-            } else if (!r.isHour && r.r > maxClockRadius * 1.6) {
+        r.r += r.v * dt;
+
+        if (r.isHour) {
+            // Hour ripple: sweeps outward past the clock, fading gracefully
+            // As it passes rings, they get a brief scan glow (handled above)
+            // Gentle core pulse when it first launches
+            if (r.r < innerRadius * 1.5 && state.coreFlash < 2) {
+                state.coreFlash = 2.0;
+            }
+            // Gently nudge sparks outward as the wave passes
+            if (r.r > innerRadius && r.r < maxClockRadius) {
+                sparks.forEach(p => {
+                    if (Math.abs(p.dist - r.r) < baseSize * 0.04) {
+                        p.scattered = Math.max(p.scattered, baseSize * 0.03);
+                        p.scatterAngle = p.angle + Math.PI;
+                    }
+                });
+            }
+            // Fade out once past the clock boundary
+            if (r.r > maxClockRadius * 1.2) {
+                r.a -= 0.025 * dt;
+            }
+            if (r.a <= 0) ripples.splice(i, 1);
+        } else {
+            // Minute ripple: unchanged behavior
+            if (r.r > maxClockRadius * 1.6) {
                 r.a -= 0.04 * dt;
                 if (r.a <= 0) ripples.splice(i, 1);
-            }
-        } else {
-            r.r -= r.v * 1.4 * dt;
-            if (r.r <= innerRadius * 0.5) {
-                // THE CRASH
-                state.coreFlash = 5.5;
-                minuteRings.forEach(ring => { ring.glow = 0; });
-                // Burst sparks outward — they scatter and regroup
-                sparks.forEach(p => {
-                    p.dist = baseSize * 0.38;
-                    p.scattered = baseSize * 0.1;
-                    p.scatterAngle = p.angle + Math.PI; // push outward
-                });
-                ripples.splice(i, 1);
             }
         }
     }
@@ -571,8 +651,11 @@ function loop(timestamp) {
 
     // ── Agent Core ─────────────────────────────────────────────
     const coreSize = baseSize * 0.07;
-    const breathCycle = Math.sin(timestamp * 0.0015);
-    const breath = 1 + breathCycle * 0.04 - state.chargeEnergy * 0.25;
+    // Breathing slows in idle: from 0.0015 to 0.0006 frequency
+    const breathFreq = 0.0015 - idle * 0.0009;
+    const breathCycle = Math.sin(timestamp * breathFreq);
+    const breathAmp = 0.04 + idle * 0.03; // deeper breaths when idle
+    const breath = 1 + breathCycle * breathAmp - state.chargeEnergy * 0.25;
     const coreRadius = coreSize * breath;
 
     // Outer glow halo
@@ -636,15 +719,20 @@ function loop(timestamp) {
         ctx.arc(hx, hy, dotSize, 0, TWO_PI);
         ctx.fill();
 
-        // Current hour: add glow
+        // Current hour: add glow with AM/PM tint
         if (isCurrentHour) {
+            // AM = warm amber glow, PM = cool blue glow
+            const ampmColor = theme.isAM
+                ? 'hsla(35, 90%, 70%,'   // warm amber
+                : 'hsla(220, 70%, 75%,'; // cool blue
             ctx.globalAlpha = 0.25 + Math.sin(timestamp * 0.002) * 0.1;
-            const hourGlow = ctx.createRadialGradient(hx, hy, 0, hx, hy, dotSize * 4);
-            hourGlow.addColorStop(0, "#fff");
-            hourGlow.addColorStop(1, "transparent");
+            const hourGlow = ctx.createRadialGradient(hx, hy, 0, hx, hy, dotSize * 5);
+            hourGlow.addColorStop(0, ampmColor + ' 0.8)');
+            hourGlow.addColorStop(0.5, ampmColor + ' 0.3)');
+            hourGlow.addColorStop(1, 'transparent');
             ctx.fillStyle = hourGlow;
             ctx.beginPath();
-            ctx.arc(hx, hy, dotSize * 4, 0, TWO_PI);
+            ctx.arc(hx, hy, dotSize * 5, 0, TWO_PI);
             ctx.fill();
         }
     }
