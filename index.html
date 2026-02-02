@@ -84,7 +84,7 @@ function resize() {
     }
 
     // Rebuild sparks — 20 ambient orbiters that collectively respond to time
-    const sparkCount = state.isMobile ? 14 : 100;
+    const sparkCount = state.isMobile ? 14 : 20;
     while (sparks.length < sparkCount) {
         sparks.push(createSpark(sparks.length));
     }
