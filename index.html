@@ -80,12 +80,13 @@ function resize() {
         minuteRings.push({ r, glow: oldGlows[i - 1] || 0 });
     }
 
-    // Rebuild sparks — always 60, one per second-agent
-    while (sparks.length < 60) {
+    // Rebuild sparks — 20 ambient orbiters that collectively respond to time
+    const sparkCount = state.isMobile ? 14 : 20;
+    while (sparks.length < sparkCount) {
         sparks.push(createSpark(sparks.length));
     }
-    sparks.length = 60;
-    sparks.forEach((p, i) => {
+    sparks.length = sparkCount;
+    sparks.forEach((p) => {
         p.outerOrbit = state.maxClockRadius * 0.7;
         p.innerTarget = state.innerRadius * 0.6;
     });
@@ -453,33 +454,25 @@ function loop(timestamp) {
         ctx.stroke();
     }
 
-    // ── Sparks as Second-Agents (#1, #2, #3) ────────────────────
-    // Each spark represents ~1 second. Over the minute they migrate
-    // from outer orbit inward toward the core, gathering energy.
-    const secProgress = theme.secFrac / 60; // 0..1 over the minute
+    // ── Sparks — Collective Seconds Energy ─────────────────────
+    // 20 orbiters that collectively tighten, accelerate, and brighten
+    // as the minute progresses. They feel the passage of time as a group.
+    const minProgress = theme.secFrac / 60; // 0..1 over the minute
     const circEnergy = theme.circadianEnergy; // 0..1, peaks at noon
+    const chargeEffect = state.chargeEnergy;
 
-    sparks.forEach((p, idx) => {
-        // #1: Each spark has a "recruitment time" — it starts migrating
-        // inward once its second has been reached in the current minute
-        const sparkSecond = idx; // spark 0 = second 0, spark 59 = second 59
-        const recruited = theme.secFrac >= sparkSecond;
-        const recruitProgress = recruited
-            ? Math.min(1, (theme.secFrac - sparkSecond) / 30) // takes ~30s to fully arrive
-            : 0;
-
-        // Target distance: outer orbit → inner core based on recruitment
+    sparks.forEach((p) => {
+        // All sparks drift inward together as the minute progresses
         const outerDist = p.outerOrbit;
         const innerDist = p.innerTarget;
-        let targetDist = outerDist - recruitProgress * (outerDist - innerDist);
+        let targetDist = outerDist - minProgress * (outerDist - innerDist) * 0.7;
 
-        // Charge phase: recruited sparks pull even tighter
-        const chargeEffect = state.chargeEnergy;
-        if (chargeEffect > 0.01 && recruited) {
-            targetDist *= (1 - chargeEffect * 0.4);
+        // Charge phase: pull even tighter in final 8 seconds
+        if (chargeEffect > 0.01) {
+            targetDist *= (1 - chargeEffect * 0.5);
         }
 
-        // #5: Scatter force from touch
+        // Touch scatter
         if (p.scattered > 0.5) {
             p.dist += Math.cos(p.scatterAngle - p.angle) * p.scattered * 0.3 * dt;
             p.angle += Math.sin(p.scatterAngle - p.angle) * p.scattered * 0.003 * dt;
@@ -488,24 +481,23 @@ function loop(timestamp) {
 
         p.dist += (targetDist - p.dist) * 0.04 * dt;
 
-        // #2: Circadian speed — faster midday, languid at night
-        const speedMult = 0.4 + circEnergy * 1.2;
-        p.angle += p.baseSpeed * speedMult * (1 + chargeEffect * 3) * dt;
+        // Speed increases with minute progress + circadian energy
+        const speedMult = (0.4 + circEnergy * 0.8) * (1 + minProgress * 1.5 + chargeEffect * 3);
+        p.angle += p.baseSpeed * speedMult * dt;
 
         const px = cx + Math.cos(p.angle) * p.dist;
         const py = cy + Math.sin(p.angle) * p.dist;
         p.trail.push({ x: px, y: py });
 
-        // #2: Trail length varies with circadian energy
+        // Trail length: longer at midday, grows slightly with minute progress
         const maxTrail = state.isMobile
-            ? Math.floor(5 + circEnergy * 8)
-            : Math.floor(6 + circEnergy * 14);
+            ? Math.floor(5 + circEnergy * 6 + minProgress * 4)
+            : Math.floor(6 + circEnergy * 10 + minProgress * 6);
         while (p.trail.length > maxTrail) p.trail.shift();
 
-        // #3: Ring interaction — check if spark crossed a ring boundary
+        // Ring interaction — light up rings when sparks cross them
         const currentRingIdx = minuteRings.findIndex(ring => ring.r > p.dist) - 1;
         if (currentRingIdx >= 0 && currentRingIdx !== p.lastRingCross && p.lastRingCross >= 0) {
-            // Spark crossed a ring! Light it up
             const crossedIdx = Math.min(currentRingIdx, p.lastRingCross);
             if (crossedIdx >= 0 && crossedIdx < 60) {
                 minuteRings[crossedIdx].glow = Math.max(minuteRings[crossedIdx].glow, 0.6);
@@ -513,15 +505,15 @@ function loop(timestamp) {
         }
         p.lastRingCross = currentRingIdx;
 
-        // Draw trail
+        // Draw trail — brighter as minute progresses
         const distFade = Math.max(0, Math.min(1, (p.dist - 5) / 30));
-        const recruitAlpha = recruited ? 0.6 + recruitProgress * 0.4 : 0.25;
+        const baseAlpha = 0.35 + minProgress * 0.35;
         for (let ti = 0; ti < p.trail.length; ti++) {
             const t = p.trail[ti];
             const progress = (ti + 1) / p.trail.length;
             const sz = p.size * progress * (0.3 + distFade * 0.7);
-            ctx.globalAlpha = progress * recruitAlpha * distFade * (0.3 + circEnergy * 0.7);
-            ctx.fillStyle = recruited ? theme.core : theme.spark;
+            ctx.globalAlpha = progress * baseAlpha * distFade * (0.3 + circEnergy * 0.7);
+            ctx.fillStyle = minProgress > 0.85 ? theme.core : theme.spark;
             ctx.beginPath();
             ctx.arc(t.x, t.y, sz, 0, TWO_PI);
             ctx.fill();
