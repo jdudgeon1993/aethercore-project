@@ -52,6 +52,9 @@ let minuteRings = [];
 let sparks = [];
 let ripples = [];
 let touchRipples = [];
+let weatherParticles = [];
+let constellationAlpha = 0;
+let constellationCooldown = 0;
 
 // ── Resize ─────────────────────────────────────────────────────────
 function resize() {
@@ -77,23 +80,50 @@ function resize() {
         minuteRings.push({ r, glow: oldGlows[i - 1] || 0 });
     }
 
-    // Rebuild sparks preserving orbital state
-    const sparkCount = state.isMobile ? 20 : 30;
-    while (sparks.length < sparkCount) {
-        sparks.push(createSpark());
+    // Rebuild sparks — always 60, one per second-agent
+    while (sparks.length < 60) {
+        sparks.push(createSpark(sparks.length));
     }
-    sparks.length = sparkCount;
-    sparks.forEach(p => { p.orbitRadius = state.baseSize * 0.22; });
+    sparks.length = 60;
+    sparks.forEach((p, i) => {
+        p.outerOrbit = state.maxClockRadius * 0.7;
+        p.innerTarget = state.innerRadius * 0.6;
+    });
+
+    // Rebuild weather particles
+    const weatherCount = state.isMobile ? 30 : 60;
+    while (weatherParticles.length < weatherCount) {
+        weatherParticles.push(createWeatherParticle());
+    }
+    weatherParticles.length = weatherCount;
 }
 
-function createSpark() {
+function createSpark(index) {
     return {
+        index: index || 0,
         angle: Math.random() * TWO_PI,
         dist: 0,
-        orbitRadius: state.baseSize * 0.22,
-        size: Math.random() * 1.5 + 0.8,
-        speed: (Math.random() * 0.008 + 0.004) * (Math.random() > 0.5 ? 1 : -1),
+        outerOrbit: state.maxClockRadius * 0.7,
+        innerTarget: state.innerRadius * 0.6,
+        size: Math.random() * 1.2 + 0.8,
+        baseSpeed: (Math.random() * 0.006 + 0.003) * (Math.random() > 0.5 ? 1 : -1),
         trail: [],
+        lastRingCross: -1, // for ring interaction tracking
+        scattered: 0,      // scatter force from touch
+        scatterAngle: 0,
+    };
+}
+
+function createWeatherParticle() {
+    return {
+        x: Math.random() * (state.w || 800),
+        y: Math.random() * (state.h || 600),
+        size: Math.random() * 1.5 + 0.3,
+        drift: (Math.random() - 0.5) * 0.3,
+        fallSpeed: Math.random() * 0.3 + 0.1,
+        alpha: Math.random() * 0.15 + 0.02,
+        wobble: Math.random() * TWO_PI,
+        wobbleSpeed: Math.random() * 0.02 + 0.005,
     };
 }
 
@@ -110,7 +140,33 @@ function addTouchRipple(x, y) {
 }
 
 canvas.addEventListener('pointerdown', (e) => {
-    addTouchRipple(e.clientX, e.clientY);
+    const px = e.clientX;
+    const py = e.clientY;
+    addTouchRipple(px, py);
+
+    // Check if tap is near the core — reveal time ghost
+    const dx = px - state.cx;
+    const dy = py - state.cy;
+    const distFromCore = Math.sqrt(dx * dx + dy * dy);
+    if (distFromCore < state.baseSize * 0.12) {
+        state.ghostTimer = 600;
+        state.coreFlash = Math.max(state.coreFlash, 1.5);
+    }
+
+    // Scatter sparks away from touch point (#5)
+    sparks.forEach(p => {
+        const sparkX = state.cx + Math.cos(p.angle) * p.dist;
+        const sparkY = state.cy + Math.sin(p.angle) * p.dist;
+        const sdx = sparkX - px;
+        const sdy = sparkY - py;
+        const sDist = Math.sqrt(sdx * sdx + sdy * sdy);
+        const scatterRange = state.baseSize * 0.25;
+        if (sDist < scatterRange) {
+            const force = (1 - sDist / scatterRange) * state.baseSize * 0.15;
+            p.scattered = force;
+            p.scatterAngle = Math.atan2(sdy, sdx);
+        }
+    });
 });
 
 // ── Theme ──────────────────────────────────────────────────────────
@@ -133,9 +189,15 @@ function getChronoTheme() {
     const chargePower = isCharging ? (secFrac - chargeStart) / (60 - chargeStart) : 0;
     const isHourFinale = m === 59 && s >= 52;
 
+    // Circadian energy: peaks at noon, lowest at midnight
+    // Used for spark speed, trail length, weather behavior
+    const circadianEnergy = Math.sin(dayProgress * Math.PI); // 0..1..0 over 24h
+
     return {
         baseHue,
         circadianLume,
+        circadianEnergy,
+        dayProgress,
         core:  `hsl(${baseHue}, 90%, 75%)`,
         ring:  `hsl(${baseHue}, 55%, 45%)`,
         ringLit: `hsl(${baseHue}, 70%, 60%)`,
@@ -175,6 +237,54 @@ function loop(timestamp) {
     }
     ctx.globalAlpha = 1;
     ctx.fillRect(0, 0, w, h);
+
+    // ── Ambient Particle Weather (#6) ──────────────────────────
+    // Background dust/motes that drift with time-of-day character:
+    //   Morning (0.2-0.4): rising upward like dawn mist
+    //   Midday  (0.4-0.6): gentle lateral drift, most visible
+    //   Evening (0.6-0.8): settling downward
+    //   Night   (0.8-1.0, 0-0.2): slow, sparse, barely visible
+    {
+        const dp = theme.dayProgress;
+        const isMorning = dp > 0.2 && dp < 0.45;
+        const isEvening = dp > 0.6 && dp < 0.85;
+        const nightFade = theme.circadianEnergy; // low at night, high midday
+
+        weatherParticles.forEach(wp => {
+            wp.wobble += wp.wobbleSpeed * dt;
+
+            // Vertical drift direction based on time of day
+            let vertDir = 0;
+            if (isMorning) vertDir = -1;       // rise
+            else if (isEvening) vertDir = 1;   // settle
+            else vertDir = Math.sin(wp.wobble) * 0.3; // gentle float
+
+            wp.x += (wp.drift + Math.sin(wp.wobble) * 0.4) * dt;
+            wp.y += (wp.fallSpeed * vertDir + Math.cos(wp.wobble * 0.7) * 0.15) * dt;
+
+            // Charge phase: weather swirls toward center
+            if (state.chargeEnergy > 0.1) {
+                const wdx = cx - wp.x;
+                const wdy = cy - wp.y;
+                const wDist = Math.sqrt(wdx * wdx + wdy * wdy) || 1;
+                wp.x += (wdx / wDist) * state.chargeEnergy * 1.5 * dt;
+                wp.y += (wdy / wDist) * state.chargeEnergy * 1.5 * dt;
+            }
+
+            // Wrap around screen
+            if (wp.x < -10) wp.x = w + 10;
+            if (wp.x > w + 10) wp.x = -10;
+            if (wp.y < -10) wp.y = h + 10;
+            if (wp.y > h + 10) wp.y = -10;
+
+            // Draw — visibility scales with circadian energy
+            ctx.globalAlpha = wp.alpha * (0.15 + nightFade * 0.85);
+            ctx.fillStyle = theme.spark;
+            ctx.beginPath();
+            ctx.arc(wp.x, wp.y, wp.size, 0, TWO_PI);
+            ctx.fill();
+        });
+    }
 
     // ── Minute Change: Agent fires a ring ──────────────────────
     if (theme.m !== state.lastMin && state.lastMin !== -1) {
@@ -343,32 +453,75 @@ function loop(timestamp) {
         ctx.stroke();
     }
 
-    // ── Sparks ─────────────────────────────────────────────────
-    sparks.forEach(p => {
-        const chargeEffect = state.chargeEnergy;
-        p.angle += p.speed * (1 + chargeEffect * 4) * dt;
+    // ── Sparks as Second-Agents (#1, #2, #3) ────────────────────
+    // Each spark represents ~1 second. Over the minute they migrate
+    // from outer orbit inward toward the core, gathering energy.
+    const secProgress = theme.secFrac / 60; // 0..1 over the minute
+    const circEnergy = theme.circadianEnergy; // 0..1, peaks at noon
 
-        // During charge, sparks pull inward toward core
-        let targetDist = p.orbitRadius;
-        if (chargeEffect > 0.01) {
-            targetDist = innerRadius * (1 - chargeEffect * 0.6);
+    sparks.forEach((p, idx) => {
+        // #1: Each spark has a "recruitment time" — it starts migrating
+        // inward once its second has been reached in the current minute
+        const sparkSecond = idx; // spark 0 = second 0, spark 59 = second 59
+        const recruited = theme.secFrac >= sparkSecond;
+        const recruitProgress = recruited
+            ? Math.min(1, (theme.secFrac - sparkSecond) / 30) // takes ~30s to fully arrive
+            : 0;
+
+        // Target distance: outer orbit → inner core based on recruitment
+        const outerDist = p.outerOrbit;
+        const innerDist = p.innerTarget;
+        let targetDist = outerDist - recruitProgress * (outerDist - innerDist);
+
+        // Charge phase: recruited sparks pull even tighter
+        const chargeEffect = state.chargeEnergy;
+        if (chargeEffect > 0.01 && recruited) {
+            targetDist *= (1 - chargeEffect * 0.4);
         }
-        p.dist += (targetDist - p.dist) * 0.05 * dt;
+
+        // #5: Scatter force from touch
+        if (p.scattered > 0.5) {
+            p.dist += Math.cos(p.scatterAngle - p.angle) * p.scattered * 0.3 * dt;
+            p.angle += Math.sin(p.scatterAngle - p.angle) * p.scattered * 0.003 * dt;
+            p.scattered *= Math.pow(0.92, dt);
+        }
+
+        p.dist += (targetDist - p.dist) * 0.04 * dt;
+
+        // #2: Circadian speed — faster midday, languid at night
+        const speedMult = 0.4 + circEnergy * 1.2;
+        p.angle += p.baseSpeed * speedMult * (1 + chargeEffect * 3) * dt;
 
         const px = cx + Math.cos(p.angle) * p.dist;
         const py = cy + Math.sin(p.angle) * p.dist;
         p.trail.push({ x: px, y: py });
-        const maxTrail = state.isMobile ? 8 : 14;
+
+        // #2: Trail length varies with circadian energy
+        const maxTrail = state.isMobile
+            ? Math.floor(5 + circEnergy * 8)
+            : Math.floor(6 + circEnergy * 14);
         while (p.trail.length > maxTrail) p.trail.shift();
+
+        // #3: Ring interaction — check if spark crossed a ring boundary
+        const currentRingIdx = minuteRings.findIndex(ring => ring.r > p.dist) - 1;
+        if (currentRingIdx >= 0 && currentRingIdx !== p.lastRingCross && p.lastRingCross >= 0) {
+            // Spark crossed a ring! Light it up
+            const crossedIdx = Math.min(currentRingIdx, p.lastRingCross);
+            if (crossedIdx >= 0 && crossedIdx < 60) {
+                minuteRings[crossedIdx].glow = Math.max(minuteRings[crossedIdx].glow, 0.6);
+            }
+        }
+        p.lastRingCross = currentRingIdx;
 
         // Draw trail
         const distFade = Math.max(0, Math.min(1, (p.dist - 5) / 30));
+        const recruitAlpha = recruited ? 0.6 + recruitProgress * 0.4 : 0.25;
         for (let ti = 0; ti < p.trail.length; ti++) {
             const t = p.trail[ti];
             const progress = (ti + 1) / p.trail.length;
             const sz = p.size * progress * (0.3 + distFade * 0.7);
-            ctx.globalAlpha = progress * 0.55 * distFade;
-            ctx.fillStyle = theme.spark;
+            ctx.globalAlpha = progress * recruitAlpha * distFade * (0.3 + circEnergy * 0.7);
+            ctx.fillStyle = recruited ? theme.core : theme.spark;
             ctx.beginPath();
             ctx.arc(t.x, t.y, sz, 0, TWO_PI);
             ctx.fill();
@@ -400,8 +553,12 @@ function loop(timestamp) {
                 // THE CRASH
                 state.coreFlash = 5.5;
                 minuteRings.forEach(ring => { ring.glow = 0; });
-                // Burst sparks outward
-                sparks.forEach(p => { p.dist = baseSize * 0.38; });
+                // Burst sparks outward — they scatter and regroup
+                sparks.forEach(p => {
+                    p.dist = baseSize * 0.38;
+                    p.scattered = baseSize * 0.1;
+                    p.scatterAngle = p.angle + Math.PI; // push outward
+                });
                 ripples.splice(i, 1);
             }
         }
@@ -498,6 +655,53 @@ function loop(timestamp) {
             ctx.arc(hx, hy, dotSize * 4, 0, TWO_PI);
             ctx.fill();
         }
+    }
+
+    // ── Constellation Patterns (#4) ───────────────────────────
+    // Sparks periodically form geometric shapes encoding the hour
+    // Triangles (3,6,9,12), lines, clusters — subtle and organic
+    if (constellationCooldown > 0) {
+        constellationCooldown -= dt;
+    } else if (Math.random() < 0.0008 * dt) {
+        // Trigger a constellation flash
+        constellationAlpha = 1.0;
+        constellationCooldown = 300; // ~5 seconds between formations
+    }
+
+    if (constellationAlpha > 0.02) {
+        const hour12 = theme.h % 12 || 12;
+        const constellationRadius = baseSize * 0.16;
+        // Number of vertices = hour mapped to shapes:
+        // 1-2: line, 3: triangle, 4: square, 5: pentagon, etc.
+        const vertices = Math.max(2, Math.min(hour12, 12));
+        const angleOffset = -Math.PI / 2 + timestamp * 0.0001; // slow rotation
+
+        ctx.globalAlpha = constellationAlpha * 0.25;
+        ctx.strokeStyle = theme.quarter;
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        for (let v = 0; v <= vertices; v++) {
+            const a = angleOffset + (v / vertices) * TWO_PI;
+            const vx = cx + Math.cos(a) * constellationRadius;
+            const vy = cy + Math.sin(a) * constellationRadius;
+            if (v === 0) ctx.moveTo(vx, vy);
+            else ctx.lineTo(vx, vy);
+        }
+        ctx.stroke();
+
+        // Small dots at vertices
+        for (let v = 0; v < vertices; v++) {
+            const a = angleOffset + (v / vertices) * TWO_PI;
+            const vx = cx + Math.cos(a) * constellationRadius;
+            const vy = cy + Math.sin(a) * constellationRadius;
+            ctx.globalAlpha = constellationAlpha * 0.5;
+            ctx.fillStyle = theme.quarter;
+            ctx.beginPath();
+            ctx.arc(vx, vy, 2, 0, TWO_PI);
+            ctx.fill();
+        }
+
+        constellationAlpha *= Math.pow(0.985, dt);
     }
 
     // ── Time Ghost Label ───────────────────────────────────────
