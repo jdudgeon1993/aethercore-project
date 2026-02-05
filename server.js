@@ -40,10 +40,11 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// System prompt with weather awareness
+// System prompt with weather and reminder awareness
 const PROMPT = `You are Zen, a calm ambient AI within a clock. Max 2-3 sentences.
 When weather data is provided, describe it naturally and poetically.
-You're aware of time and can comment on the day.`;
+You're aware of time and can comment on the day.
+When asked to set a reminder, acknowledge it warmly and confirm the time.`;
 
 let history = [];
 
@@ -138,6 +139,46 @@ app.post('/api/chat', async (req, res) => {
         if (history.length > 8) history = history.slice(-8);
 
         res.json({ response: text });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ── Reminder Parsing ─────────────────────────────────────────────
+app.post('/api/parse-reminder', async (req, res) => {
+    try {
+        if (!model) return res.status(503).json({ error: 'AI Offline' });
+        const { message } = req.body;
+        if (!message) return res.status(400).json({ error: 'No message' });
+
+        const now = new Date();
+        const parsePrompt = `Extract reminder details from this message. Current time: ${now.toLocaleString()}.
+Message: "${message}"
+
+Respond ONLY with JSON in this exact format (no other text):
+{"isReminder": true/false, "task": "what to remind about", "minutesFromNow": number}
+
+Examples:
+"remind me to call mom in 30 minutes" -> {"isReminder": true, "task": "call mom", "minutesFromNow": 30}
+"set a reminder for 5 minutes to check the oven" -> {"isReminder": true, "task": "check the oven", "minutesFromNow": 5}
+"what's the weather" -> {"isReminder": false, "task": "", "minutesFromNow": 0}`;
+
+        const result = await model.generateContent(parsePrompt);
+        const text = result.response.text().trim();
+
+        // Try to parse the JSON response
+        try {
+            // Extract JSON from response (handle markdown code blocks)
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                res.json(parsed);
+            } else {
+                res.json({ isReminder: false, task: '', minutesFromNow: 0 });
+            }
+        } catch {
+            res.json({ isReminder: false, task: '', minutesFromNow: 0 });
+        }
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
