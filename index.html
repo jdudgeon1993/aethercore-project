@@ -124,11 +124,73 @@
             #chat-input { font-size: 14px; padding: 10px 14px; }
             #chat-send { padding: 8px 12px; font-size: 13px; }
         }
+
+        /* ── Connection Status ─────────────────────────────────────── */
+        #zen-status {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: opacity 0.4s ease, transform 0.4s ease;
+            z-index: 100;
+        }
+
+        #zen-status.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        #zen-status .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transition: background 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        #zen-status.online .dot {
+            background: #4ade80;
+            box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+        }
+
+        #zen-status.offline .dot {
+            background: #f87171;
+            box-shadow: 0 0 8px rgba(248, 113, 113, 0.4);
+        }
+
+        #zen-status.checking .dot {
+            background: #fbbf24;
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <canvas id="zenCanvas" role="img" aria-label="Zen Sanctuary: an ambient animated clock"></canvas>
     <noscript>Zen Sanctuary requires JavaScript to display the ambient clock.</noscript>
+
+    <!-- Connection Status -->
+    <div id="zen-status">
+        <span class="dot"></span>
+        <span class="label">Connecting...</span>
+    </div>
 
     <!-- Chat UI -->
     <div id="chat-container">
@@ -1013,9 +1075,81 @@ requestAnimationFrame(loop);
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 const chatResponse = document.getElementById('chat-response');
+const zenStatus = document.getElementById('zen-status');
+const statusLabel = zenStatus.querySelector('.label');
 
 let responseTimeout = null;
+let statusTimeout = null;
 let isWaiting = false;
+let isOnline = false;
+
+function setStatus(status, label) {
+    zenStatus.classList.remove('online', 'offline', 'checking');
+    zenStatus.classList.add('visible', status);
+    statusLabel.textContent = label;
+
+    // Auto-hide status after it's been shown
+    clearTimeout(statusTimeout);
+    if (status === 'online') {
+        statusTimeout = setTimeout(() => {
+            zenStatus.classList.remove('visible');
+        }, 5000);
+    }
+}
+
+async function checkConnection() {
+    setStatus('checking', 'Connecting...');
+
+    try {
+        const res = await fetch('/api/health', {
+            method: 'GET',
+            cache: 'no-store'
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            isOnline = true;
+            setStatus('online', 'Zen is awake');
+
+            // Show a greeting from Zen
+            setTimeout(() => {
+                showGreeting();
+            }, 800);
+        } else {
+            throw new Error('Health check failed');
+        }
+    } catch (error) {
+        console.error('Connection check failed:', error);
+        isOnline = false;
+        setStatus('offline', 'Zen is sleeping');
+    }
+}
+
+async function showGreeting() {
+    // Get a greeting from Zen
+    try {
+        const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: 'Say a brief, warm greeting (one sentence max). Mention the current time naturally.' })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            chatResponse.textContent = data.response;
+            chatResponse.classList.add('visible');
+            state.coreFlash = 2.5;
+
+            clearTimeout(responseTimeout);
+            responseTimeout = setTimeout(() => {
+                chatResponse.classList.remove('visible');
+            }, 8000);
+        }
+    } catch (error) {
+        // Silent fail for greeting - not critical
+        console.log('Greeting skipped:', error);
+    }
+}
 
 async function sendMessage() {
     const message = chatInput.value.trim();
@@ -1050,8 +1184,12 @@ async function sendMessage() {
         chatInput.value = '';
 
         // Trigger core flash to show Zen is "speaking"
-        if (typeof state !== 'undefined') {
-            state.coreFlash = Math.max(state.coreFlash || 0, 2.0);
+        state.coreFlash = Math.max(state.coreFlash || 0, 2.0);
+
+        // Update status to online
+        if (!isOnline) {
+            isOnline = true;
+            setStatus('online', 'Zen is awake');
         }
 
         // Auto-hide response after 12 seconds
@@ -1064,6 +1202,8 @@ async function sendMessage() {
         console.error('Chat error:', error);
         chatResponse.classList.remove('thinking');
         chatResponse.textContent = 'Unable to reach Zen. Please check your connection.';
+        isOnline = false;
+        setStatus('offline', 'Zen is sleeping');
 
         clearTimeout(responseTimeout);
         responseTimeout = setTimeout(() => {
@@ -1091,6 +1231,9 @@ chatResponse.addEventListener('click', () => {
     chatResponse.classList.remove('visible');
     clearTimeout(responseTimeout);
 });
+
+// Check connection on page load
+setTimeout(checkConnection, 1000);
 
 })();
 </script>
