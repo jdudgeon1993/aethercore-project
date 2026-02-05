@@ -1,6 +1,6 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * VERSION: 3.0.0 - Stable Force
+ * VERSION: 3.2.0 - Weather + Rate Limit Fix
  */
 
 import 'dotenv/config';
@@ -24,46 +24,16 @@ console.log('📍 Weather:', WEATHER_KEY ? 'Configured' : 'Not configured');
 console.log('🏙️  Default city:', DEFAULT_CITY);
 
 let model = null;
-let activeName = "none";
+let activeName = "gemini-2.0-flash";
 
-async function bootAI() {
-    if (!API_KEY) return console.error('❌ Missing GEMINI_API_KEY');
-
-    // We force the 'v1' stable version to avoid v1beta 404s
+// Initialize model without test calls (saves API quota)
+if (API_KEY) {
     const genAI = new GoogleGenerativeAI(API_KEY);
-    
-    // Updated model list: trying 2.0/latest aliases first
-    const candidates = [
-        'gemini-1.5-flash',
-        'gemini-2.0-flash', 
-        'gemini-flash-latest',
-        'gemini-1.5-pro'
-    ];
-
-    for (const name of candidates) {
-        try {
-            console.log(`📡 Handshake attempt: ${name}...`);
-            // Attempt to get the model specifically from the stable v1 path
-            const testModel = genAI.getGenerativeModel({ model: name }, { apiVersion: 'v1' });
-            
-            const test = await testModel.generateContent({
-                contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-                generationConfig: { maxOutputTokens: 1 }
-            });
-
-            model = testModel;
-            activeName = name;
-            console.log(`✅ CONNECTION ESTABLISHED: ${name}`);
-            break; 
-        } catch (err) {
-            console.warn(`⚠️  ${name} unavailable: ${err.message}`);
-        }
-    }
-
-    if (!model) console.error('🚨 HANDSHAKE FAILED: Please check Google Cloud Project "Generative Language API" status.');
+    model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    console.log('✅ AI Model ready: gemini-2.0-flash');
+} else {
+    console.error('❌ Missing GEMINI_API_KEY');
 }
-
-bootAI();
 
 const app = express();
 app.use(cors());
