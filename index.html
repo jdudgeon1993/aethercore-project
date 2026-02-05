@@ -267,9 +267,37 @@
             animation: pulse 1s ease-in-out infinite;
         }
 
+        #zen-status.listening .dot {
+            background: #60a5fa;
+            box-shadow: 0 0 8px rgba(96, 165, 250, 0.5);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        #zen-status.waking .dot {
+            background: #fbbf24;
+            animation: pulse 0.5s ease-in-out infinite;
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 0.4; }
             50% { opacity: 1; }
+        }
+
+        /* Always-listening mode indicator */
+        #voice-btn.always-on {
+            background: rgba(96, 165, 250, 0.2);
+            color: #60a5fa;
+            box-shadow: 0 0 12px rgba(96, 165, 250, 0.3);
+        }
+
+        #voice-btn.always-on.listening {
+            background: rgba(96, 165, 250, 0.3);
+            animation: pulse-listen 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-listen {
+            0%, 100% { box-shadow: 0 0 12px rgba(96, 165, 250, 0.3); }
+            50% { box-shadow: 0 0 20px rgba(96, 165, 250, 0.6); }
         }
     </style>
 </head>
@@ -1202,18 +1230,26 @@ let responseTimeout = null;
 let statusTimeout = null;
 let isWaiting = false;
 let isOnline = false;
+let alwaysListening = false;
 
-function setStatus(status, label) {
-    zenStatus.classList.remove('online', 'offline', 'checking');
+function setStatus(status, label, persist = false) {
+    zenStatus.classList.remove('online', 'offline', 'checking', 'listening', 'waking');
     zenStatus.classList.add('visible', status);
     statusLabel.textContent = label;
 
-    // Auto-hide status after it's been shown
+    // Auto-hide status after it's been shown (unless persistent or in listening mode)
     clearTimeout(statusTimeout);
-    if (status === 'online') {
+    if (!persist && !alwaysListening && status === 'online') {
         statusTimeout = setTimeout(() => {
             zenStatus.classList.remove('visible');
         }, 5000);
+    }
+}
+
+// Update status when in always-listening mode
+function updateListeningStatus() {
+    if (alwaysListening) {
+        setStatus('listening', 'Listening for "Hey Zen"...', true);
     }
 }
 
@@ -1287,8 +1323,8 @@ async function showGreeting() {
     }
 }
 
-async function sendMessage() {
-    const message = chatInput.value.trim();
+async function sendMessage(spokenMessage = null) {
+    const message = spokenMessage || chatInput.value.trim();
     if (!message || isWaiting) return;
 
     isWaiting = true;
@@ -1299,6 +1335,11 @@ async function sendMessage() {
     chatResponse.textContent = '...';
     chatResponse.classList.add('visible', 'thinking');
 
+    // Show "Waking Zen" status for slow responses
+    const wakingTimeout = setTimeout(() => {
+        setStatus('waking', 'Waking Zen...', true);
+    }, 2000);
+
     // Check if this is a reminder request (in parallel with chat)
     checkForReminder(message);
 
@@ -1308,6 +1349,8 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message })
         });
+
+        clearTimeout(wakingTimeout);
 
         if (!res.ok) {
             throw new Error(`Server error: ${res.status}`);
@@ -1329,9 +1372,11 @@ async function sendMessage() {
         // Trigger core flash to show Zen is "speaking"
         state.coreFlash = Math.max(state.coreFlash || 0, 2.0);
 
-        // Update status to online
-        if (!isOnline) {
-            isOnline = true;
+        // Update status
+        isOnline = true;
+        if (alwaysListening) {
+            updateListeningStatus();
+        } else {
             setStatus('online', 'Zen is awake');
         }
 
@@ -1342,6 +1387,7 @@ async function sendMessage() {
         }, 12000);
 
     } catch (error) {
+        clearTimeout(wakingTimeout);
         console.error('Chat error:', error);
         chatResponse.classList.remove('thinking');
         chatResponse.textContent = 'Unable to reach Zen. Please check your connection.';
@@ -1356,7 +1402,9 @@ async function sendMessage() {
         isWaiting = false;
         chatSend.disabled = false;
         chatInput.disabled = false;
-        chatInput.focus();
+        if (!alwaysListening) {
+            chatInput.focus();
+        }
     }
 }
 
@@ -1466,30 +1514,72 @@ function speakResponse(text) {
     }, 10000);
 }
 
-// ── Voice Input (Web Speech API) ─────────────────────────────────
+// ── Voice Input (Web Speech API) with Continuous Listening ───────
 const voiceBtn = document.getElementById('voice-btn');
 let recognition = null;
 let isListening = false;
+let longPressVoiceTimer = null;
+
+// Wake words that trigger Zen
+const WAKE_WORDS = ['hey zen', 'okay zen', 'ok zen', 'hey zen,', 'zen,', 'zen '];
+
+function extractCommand(transcript) {
+    const lower = transcript.toLowerCase().trim();
+
+    // Check for wake words and extract the command after them
+    for (const wake of WAKE_WORDS) {
+        const idx = lower.indexOf(wake);
+        if (idx !== -1) {
+            const command = transcript.slice(idx + wake.length).trim();
+            return command || null;
+        }
+    }
+
+    // If just "zen" at the very start, take the rest as command
+    if (lower.startsWith('zen ') || lower.startsWith('zen,')) {
+        return transcript.slice(4).trim();
+    }
+
+    return null;
+}
 
 // Check if Speech Recognition is supported
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (SpeechRecognition) {
     recognition = new SpeechRecognition();
-    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     recognition.onstart = () => {
         isListening = true;
         voiceBtn.classList.add('listening');
-        chatInput.placeholder = 'Listening...';
+        if (alwaysListening) {
+            chatInput.placeholder = 'Say "Hey Zen" + command...';
+        } else {
+            chatInput.placeholder = 'Listening...';
+        }
     };
 
     recognition.onend = () => {
         isListening = false;
         voiceBtn.classList.remove('listening');
-        chatInput.placeholder = 'Ask Zen anything...';
+
+        // In always-listening mode, restart recognition after a short pause
+        if (alwaysListening && !isWaiting) {
+            setTimeout(() => {
+                if (alwaysListening && !isListening) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.log('Recognition restart failed:', e);
+                    }
+                }
+            }, 300);
+            chatInput.placeholder = 'Say "Hey Zen"...';
+        } else {
+            chatInput.placeholder = 'Ask Zen anything...';
+        }
     };
 
     recognition.onresult = (event) => {
@@ -1505,40 +1595,141 @@ if (SpeechRecognition) {
             }
         }
 
-        // Show interim results in input
-        if (interimTranscript) {
-            chatInput.value = interimTranscript;
-        }
+        if (alwaysListening) {
+            // In always-listening mode, check for wake word
+            const fullText = interimTranscript || finalTranscript;
+            chatInput.value = fullText;
 
-        // When we have a final result, send it
-        if (finalTranscript) {
-            chatInput.value = finalTranscript;
-            sendMessage();
+            if (finalTranscript) {
+                const command = extractCommand(finalTranscript);
+                if (command && command.length > 2) {
+                    console.log('Wake word detected! Command:', command);
+                    state.coreFlash = 2.0; // Visual feedback
+                    chatInput.value = command;
+                    sendMessage(command);
+                } else if (command === null) {
+                    // No wake word found - clear and keep listening
+                    chatInput.value = '';
+                }
+            }
+        } else {
+            // Push-to-talk mode: send everything
+            if (interimTranscript) {
+                chatInput.value = interimTranscript;
+            }
+
+            if (finalTranscript) {
+                chatInput.value = finalTranscript;
+                sendMessage();
+            }
         }
     };
 
     recognition.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
+
+        // Don't stop always-listening on transient errors
+        if (event.error === 'no-speech' || event.error === 'aborted') {
+            if (alwaysListening) {
+                // Just restart
+                return;
+            }
+        }
+
         isListening = false;
         voiceBtn.classList.remove('listening');
-        chatInput.placeholder = 'Ask Zen anything...';
+
+        if (!alwaysListening) {
+            chatInput.placeholder = 'Ask Zen anything...';
+        }
 
         if (event.error === 'not-allowed') {
-            chatResponse.textContent = 'Microphone access denied. Please allow microphone access to use voice input.';
+            chatResponse.textContent = 'Microphone access denied. Please enable microphone for voice commands.';
             chatResponse.classList.add('visible');
+            alwaysListening = false;
+            voiceBtn.classList.remove('always-on');
             setTimeout(() => chatResponse.classList.remove('visible'), 5000);
         }
     };
 
-    voiceBtn.addEventListener('click', () => {
-        if (isWaiting) return;
+    // Toggle always-listening mode on long press
+    function enableAlwaysListening() {
+        alwaysListening = true;
+        voiceBtn.classList.add('always-on');
+        recognition.continuous = true;
+        setStatus('listening', 'Listening for "Hey Zen"...', true);
+        chatInput.placeholder = 'Say "Hey Zen"...';
+
+        // Start listening
+        if (!isListening) {
+            try {
+                recognition.start();
+            } catch (e) {
+                console.log('Recognition start failed:', e);
+            }
+        }
+
+        // Announce the mode
+        speakResponse('Always listening mode enabled. Say "Hey Zen" followed by your command.');
+    }
+
+    function disableAlwaysListening() {
+        alwaysListening = false;
+        voiceBtn.classList.remove('always-on');
+        recognition.continuous = false;
 
         if (isListening) {
             recognition.stop();
-        } else {
-            recognition.start();
+        }
+
+        chatInput.placeholder = 'Ask Zen anything...';
+        setStatus('online', 'Zen is awake');
+    }
+
+    // Short press: push-to-talk OR toggle off always-listening
+    // Long press: enable always-listening
+    voiceBtn.addEventListener('pointerdown', (e) => {
+        if (isWaiting) return;
+
+        longPressVoiceTimer = setTimeout(() => {
+            longPressVoiceTimer = null;
+            if (!alwaysListening) {
+                enableAlwaysListening();
+            }
+        }, 800);
+    });
+
+    voiceBtn.addEventListener('pointerup', () => {
+        if (longPressVoiceTimer) {
+            clearTimeout(longPressVoiceTimer);
+            longPressVoiceTimer = null;
+
+            // Short press action
+            if (alwaysListening) {
+                disableAlwaysListening();
+            } else if (isListening) {
+                recognition.stop();
+            } else {
+                recognition.continuous = false;
+                recognition.start();
+            }
         }
     });
+
+    voiceBtn.addEventListener('pointercancel', () => {
+        if (longPressVoiceTimer) {
+            clearTimeout(longPressVoiceTimer);
+            longPressVoiceTimer = null;
+        }
+    });
+
+    voiceBtn.addEventListener('pointerleave', () => {
+        if (longPressVoiceTimer) {
+            clearTimeout(longPressVoiceTimer);
+            longPressVoiceTimer = null;
+        }
+    });
+
 } else {
     // Speech Recognition not supported
     voiceBtn.disabled = true;
