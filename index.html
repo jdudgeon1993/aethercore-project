@@ -1306,35 +1306,91 @@ chatResponse.addEventListener('click', () => {
 const synth = window.speechSynthesis;
 let zenVoice = null;
 let voiceEnabled = true;
+let voicesLoaded = false;
 
 // Find a calm, pleasant voice
 function loadVoices() {
+    if (!synth) return;
+
     const voices = synth.getVoices();
+    console.log('Available voices:', voices.length);
+
+    if (voices.length === 0) {
+        // Voices not loaded yet - will retry on voiceschanged
+        return;
+    }
+
+    voicesLoaded = true;
+
     // Prefer: Samantha (Mac), Google UK English Female, or any female en voice
     zenVoice = voices.find(v => v.name.includes('Samantha')) ||
                voices.find(v => v.name.includes('Google UK English Female')) ||
-               voices.find(v => v.name.includes('Female') && v.lang.startsWith('en')) ||
-               voices.find(v => v.lang.startsWith('en'));
+               voices.find(v => v.name.toLowerCase().includes('female') && v.lang.startsWith('en')) ||
+               voices.find(v => v.lang.startsWith('en')) ||
+               voices[0]; // Fallback to first available voice
+
+    console.log('Selected voice:', zenVoice?.name || 'default');
 }
 
 if (synth) {
     loadVoices();
     synth.onvoiceschanged = loadVoices;
+
+    // Some browsers need a delay to load voices
+    setTimeout(loadVoices, 100);
+    setTimeout(loadVoices, 500);
+    setTimeout(loadVoices, 1000);
 }
 
 function speakResponse(text) {
-    if (!synth || !voiceEnabled || !text) return;
+    if (!synth || !voiceEnabled || !text) {
+        console.log('TTS skipped:', !synth ? 'no synth' : !voiceEnabled ? 'disabled' : 'no text');
+        return;
+    }
+
+    console.log('Speaking:', text.substring(0, 50) + '...');
 
     // Cancel any ongoing speech
     synth.cancel();
 
+    // Try to load voices if not loaded yet
+    if (!voicesLoaded) {
+        loadVoices();
+    }
+
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = zenVoice;
+
+    if (zenVoice) {
+        utterance.voice = zenVoice;
+    }
+
     utterance.rate = 0.9;  // Slightly slower for zen feel
     utterance.pitch = 1.0;
     utterance.volume = 0.8;
 
+    utterance.onstart = () => console.log('TTS started');
+    utterance.onend = () => console.log('TTS ended');
+    utterance.onerror = (e) => console.error('TTS error:', e.error);
+
+    // Mobile Safari workaround: need to speak immediately after user gesture
+    // The unlock mechanism handles this, but we also need to handle
+    // cases where the synth gets paused
+    if (synth.paused) {
+        synth.resume();
+    }
+
     synth.speak(utterance);
+
+    // Chrome bug workaround: speech synthesis stops after ~15 seconds
+    // Keep it alive with resume calls
+    const keepAlive = setInterval(() => {
+        if (synth.speaking) {
+            synth.pause();
+            synth.resume();
+        } else {
+            clearInterval(keepAlive);
+        }
+    }, 10000);
 }
 
 // ── Voice Input (Web Speech API) ─────────────────────────────────
@@ -1418,11 +1474,60 @@ if (SpeechRecognition) {
 
 // ── Reminders System (with recurring + pomodoro support) ─────────
 let reminders = JSON.parse(localStorage.getItem('zenReminders') || '[]');
+let notificationPermissionRequested = false;
+let ttsUnlocked = false;
 
-// Request notification permission
-if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission();
+// Request notification permission on first user interaction (required for mobile)
+async function requestNotificationPermission() {
+    if (notificationPermissionRequested) return;
+    notificationPermissionRequested = true;
+
+    if ('Notification' in window && Notification.permission === 'default') {
+        console.log('Requesting notification permission...');
+        const permission = await Notification.requestPermission();
+        console.log('Notification permission:', permission);
+
+        if (permission === 'granted') {
+            // Test notification to confirm it works
+            setTimeout(() => {
+                new Notification('Zen Sanctuary', {
+                    body: 'Notifications enabled! I can now remind you.',
+                    tag: 'zen-test-notification'
+                });
+            }, 1000);
+        }
+    }
 }
+
+// Unlock TTS on first user interaction (required for mobile)
+function unlockTTS() {
+    if (ttsUnlocked || !synth) return;
+
+    // Create a silent utterance to unlock TTS
+    const unlock = new SpeechSynthesisUtterance('');
+    unlock.volume = 0;
+    synth.speak(unlock);
+    ttsUnlocked = true;
+    console.log('TTS unlocked');
+}
+
+// First interaction handler - unlock everything
+let hasInteracted = false;
+function onFirstInteraction() {
+    if (hasInteracted) return;
+    hasInteracted = true;
+
+    console.log('First interaction - unlocking features');
+    requestNotificationPermission();
+    unlockTTS();
+
+    // Remove listeners after first interaction
+    document.removeEventListener('click', onFirstInteraction);
+    document.removeEventListener('touchstart', onFirstInteraction);
+}
+
+document.addEventListener('click', onFirstInteraction);
+document.addEventListener('touchstart', onFirstInteraction);
 
 function saveReminders() {
     localStorage.setItem('zenReminders', JSON.stringify(reminders));
@@ -1461,6 +1566,86 @@ function cancelReminder(keyword) {
     return reminders.length < before;
 }
 
+function triggerReminder(r) {
+    console.log('Triggering reminder:', r.task);
+
+    const reminderText = `Reminder: ${r.task}`;
+
+    // Try browser notification first
+    let notificationShown = false;
+    if ('Notification' in window) {
+        console.log('Notification permission:', Notification.permission);
+
+        if (Notification.permission === 'granted') {
+            try {
+                const notification = new Notification('Zen Reminder', {
+                    body: r.task,
+                    icon: '/favicon.ico',
+                    tag: 'zen-reminder-' + r.id,
+                    requireInteraction: true,
+                    vibrate: [200, 100, 200]
+                });
+
+                notification.onclick = () => {
+                    window.focus();
+                    notification.close();
+                };
+
+                notificationShown = true;
+                console.log('Browser notification sent');
+            } catch (e) {
+                console.error('Notification failed:', e);
+            }
+        } else if (Notification.permission === 'default') {
+            // Try to request permission now
+            Notification.requestPermission().then(perm => {
+                if (perm === 'granted') {
+                    new Notification('Zen Reminder', { body: r.task });
+                }
+            });
+        }
+    }
+
+    // Always show in chat UI (works regardless of notification permission)
+    chatResponse.textContent = reminderText;
+    chatResponse.classList.add('visible');
+
+    // Flash the core dramatically
+    state.coreFlash = 4.0;
+
+    // Play a tone/beep if available (fallback audio alert)
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        oscillator.frequency.value = 440; // A4 note
+        oscillator.type = 'sine';
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.5);
+        console.log('Audio alert played');
+    } catch (e) {
+        console.log('Audio alert failed:', e);
+    }
+
+    // Speak the reminder (TTS)
+    speakResponse(reminderText);
+
+    // Keep visible longer for reminders
+    clearTimeout(responseTimeout);
+    responseTimeout = setTimeout(() => {
+        chatResponse.classList.remove('visible');
+    }, 15000);
+
+    console.log('Reminder triggered successfully');
+}
+
 function checkReminders() {
     const now = Date.now();
     let updated = false;
@@ -1469,29 +1654,13 @@ function checkReminders() {
         if (!r.notified && now >= r.triggerAt) {
             updated = true;
 
-            // Show notification
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification('Zen Reminder', {
-                    body: r.task,
-                    icon: '/favicon.ico',
-                    tag: 'zen-reminder-' + r.id
-                });
-            }
-
-            // Also show in chat and speak
-            chatResponse.textContent = `Reminder: ${r.task}`;
-            chatResponse.classList.add('visible');
-            speakResponse(`Reminder: ${r.task}`);
-            state.coreFlash = 3.0;
-
-            clearTimeout(responseTimeout);
-            responseTimeout = setTimeout(() => {
-                chatResponse.classList.remove('visible');
-            }, 10000);
+            // Trigger the reminder with all alerts
+            triggerReminder(r);
 
             // Handle recurring reminders
             if (r.recurring && r.intervalMinutes > 0) {
                 r.triggerAt = now + (r.intervalMinutes * 60 * 1000);
+                console.log('Recurring reminder rescheduled for', new Date(r.triggerAt));
                 // Don't mark as notified - let it fire again
             } else {
                 r.notified = true;
