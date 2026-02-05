@@ -1,6 +1,6 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * VERSION: 3.2.0 - Weather + Rate Limit Fix
+ * VERSION: 4.0.0 - Full Features
  */
 
 import 'dotenv/config';
@@ -19,7 +19,7 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const WEATHER_KEY = process.env.OPENWEATHER_API_KEY;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || 'Nashville';
 
-console.log('🚀 Initializing Zen Sanctuary [v3.1 Weather]...');
+console.log('🚀 Initializing Zen Sanctuary [v4.0 Full Features]...');
 console.log('📍 Weather:', WEATHER_KEY ? 'Configured' : 'Not configured');
 console.log('🏙️  Default city:', DEFAULT_CITY);
 
@@ -40,11 +40,24 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// System prompt with weather and reminder awareness
-const PROMPT = `You are Zen, a calm ambient AI within a clock. Max 2-3 sentences.
-When weather data is provided, describe it naturally and poetically.
-You're aware of time and can comment on the day.
-When asked to set a reminder, acknowledge it warmly and confirm the time.`;
+// System prompt - IMPORTANT: Tells Zen about ALL its capabilities
+const PROMPT = `You are Zen, a calm ambient AI assistant living within a beautiful clock interface. Keep responses to 2-3 sentences max.
+
+YOUR CAPABILITIES (you CAN do all of these):
+- Weather: You can check current weather. When weather data appears in brackets, use it naturally.
+- Reminders: You CAN set reminders! Users can say "remind me to X in Y minutes" or "remind me at 3pm to X". Confirm warmly when they set one.
+- Voice: Users can speak to you (mic button) and you speak responses aloud.
+- Time: You ARE the clock - you always know the current time.
+- Pomodoro: You can start focus timers ("start a pomodoro" or "25 minute focus session").
+- Conversation: You can discuss any topic thoughtfully.
+
+YOUR PERSONALITY:
+- Calm, warm, and zen-like
+- Concise but helpful
+- Poetic when describing weather
+- Never say you "can't" do reminders, weather, or voice - you CAN.
+
+When users ask about your capabilities, be confident about what you can do.`;
 
 let history = [];
 
@@ -144,7 +157,7 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// ── Reminder Parsing ─────────────────────────────────────────────
+// ── Reminder Parsing (supports specific times and recurring) ─────
 app.post('/api/parse-reminder', async (req, res) => {
     try {
         if (!model) return res.status(503).json({ error: 'AI Offline' });
@@ -155,29 +168,44 @@ app.post('/api/parse-reminder', async (req, res) => {
         const parsePrompt = `Extract reminder details from this message. Current time: ${now.toLocaleString()}.
 Message: "${message}"
 
-Respond ONLY with JSON in this exact format (no other text):
-{"isReminder": true/false, "task": "what to remind about", "minutesFromNow": number}
+Respond ONLY with valid JSON (no markdown, no explanation):
+{"isReminder": boolean, "task": "string", "minutesFromNow": number, "recurring": boolean, "intervalMinutes": number}
+
+RULES:
+- For "in X minutes/hours": calculate minutesFromNow directly
+- For "at 3pm" or "at 15:00": calculate minutes from current time to that time today (or tomorrow if past)
+- For "every X minutes" or "every hour": set recurring=true and intervalMinutes
+- For pomodoro/focus: treat as 25-minute reminder with task "Pomodoro break"
+- 1 hour = 60 minutes, 2 hours = 120 minutes
 
 Examples:
-"remind me to call mom in 30 minutes" -> {"isReminder": true, "task": "call mom", "minutesFromNow": 30}
-"set a reminder for 5 minutes to check the oven" -> {"isReminder": true, "task": "check the oven", "minutesFromNow": 5}
-"what's the weather" -> {"isReminder": false, "task": "", "minutesFromNow": 0}`;
+"remind me in 30 minutes to stretch" -> {"isReminder":true,"task":"stretch","minutesFromNow":30,"recurring":false,"intervalMinutes":0}
+"remind me at 3pm to call mom" (if now is 2pm) -> {"isReminder":true,"task":"call mom","minutesFromNow":60,"recurring":false,"intervalMinutes":0}
+"remind me every hour to drink water" -> {"isReminder":true,"task":"drink water","minutesFromNow":60,"recurring":true,"intervalMinutes":60}
+"start a pomodoro" -> {"isReminder":true,"task":"Pomodoro break - time to rest","minutesFromNow":25,"recurring":false,"intervalMinutes":0}
+"what's the weather" -> {"isReminder":false,"task":"","minutesFromNow":0,"recurring":false,"intervalMinutes":0}`;
 
         const result = await model.generateContent(parsePrompt);
         const text = result.response.text().trim();
 
         // Try to parse the JSON response
         try {
-            // Extract JSON from response (handle markdown code blocks)
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            const jsonMatch = text.match(/\{[\s\S]*?\}/);
             if (jsonMatch) {
                 const parsed = JSON.parse(jsonMatch[0]);
-                res.json(parsed);
+                // Ensure all fields exist
+                res.json({
+                    isReminder: parsed.isReminder || false,
+                    task: parsed.task || '',
+                    minutesFromNow: parsed.minutesFromNow || 0,
+                    recurring: parsed.recurring || false,
+                    intervalMinutes: parsed.intervalMinutes || 0
+                });
             } else {
-                res.json({ isReminder: false, task: '', minutesFromNow: 0 });
+                res.json({ isReminder: false, task: '', minutesFromNow: 0, recurring: false, intervalMinutes: 0 });
             }
         } catch {
-            res.json({ isReminder: false, task: '', minutesFromNow: 0 });
+            res.json({ isReminder: false, task: '', minutesFromNow: 0, recurring: false, intervalMinutes: 0 });
         }
     } catch (e) {
         res.status(500).json({ error: e.message });

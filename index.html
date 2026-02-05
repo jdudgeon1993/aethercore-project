@@ -1416,7 +1416,7 @@ if (SpeechRecognition) {
     voiceBtn.title = 'Voice input not supported in this browser';
 }
 
-// ── Reminders System ─────────────────────────────────────────────
+// ── Reminders System (with recurring + pomodoro support) ─────────
 let reminders = JSON.parse(localStorage.getItem('zenReminders') || '[]');
 
 // Request notification permission
@@ -1428,16 +1428,37 @@ function saveReminders() {
     localStorage.setItem('zenReminders', JSON.stringify(reminders));
 }
 
-function addReminder(task, minutesFromNow) {
+function addReminder(task, minutesFromNow, recurring = false, intervalMinutes = 0) {
     const reminder = {
         id: Date.now(),
         task,
         triggerAt: Date.now() + (minutesFromNow * 60 * 1000),
-        notified: false
+        notified: false,
+        recurring,
+        intervalMinutes
     };
     reminders.push(reminder);
     saveReminders();
     return reminder;
+}
+
+function listReminders() {
+    const active = reminders.filter(r => !r.notified);
+    if (active.length === 0) {
+        return "No active reminders.";
+    }
+    return active.map(r => {
+        const mins = Math.round((r.triggerAt - Date.now()) / 60000);
+        const recurText = r.recurring ? ' (recurring)' : '';
+        return `• ${r.task} - in ${mins} min${recurText}`;
+    }).join('\n');
+}
+
+function cancelReminder(keyword) {
+    const before = reminders.length;
+    reminders = reminders.filter(r => !r.task.toLowerCase().includes(keyword.toLowerCase()));
+    saveReminders();
+    return reminders.length < before;
 }
 
 function checkReminders() {
@@ -1446,7 +1467,6 @@ function checkReminders() {
 
     reminders.forEach(r => {
         if (!r.notified && now >= r.triggerAt) {
-            r.notified = true;
             updated = true;
 
             // Show notification
@@ -1468,22 +1488,59 @@ function checkReminders() {
             responseTimeout = setTimeout(() => {
                 chatResponse.classList.remove('visible');
             }, 10000);
+
+            // Handle recurring reminders
+            if (r.recurring && r.intervalMinutes > 0) {
+                r.triggerAt = now + (r.intervalMinutes * 60 * 1000);
+                // Don't mark as notified - let it fire again
+            } else {
+                r.notified = true;
+            }
         }
     });
 
-    // Clean up old notified reminders (older than 1 hour)
+    // Clean up old non-recurring notified reminders
     const oneHourAgo = now - 3600000;
-    reminders = reminders.filter(r => !r.notified || r.triggerAt > oneHourAgo);
+    reminders = reminders.filter(r => r.recurring || !r.notified || r.triggerAt > oneHourAgo);
 
     if (updated) saveReminders();
 }
 
-// Check reminders every 10 seconds
-setInterval(checkReminders, 10000);
+// Check reminders every 5 seconds (faster for better accuracy)
+setInterval(checkReminders, 5000);
 
 // Parse potential reminder from message
 async function checkForReminder(message) {
-    const reminderKeywords = ['remind', 'reminder', 'alert', 'notify', 'in \\d+ minute'];
+    const lowerMsg = message.toLowerCase();
+
+    // Handle special commands locally
+    if (lowerMsg.includes('what reminder') || lowerMsg.includes('list reminder') || lowerMsg.includes('my reminder')) {
+        const list = listReminders();
+        setTimeout(() => {
+            chatResponse.textContent = list;
+            chatResponse.classList.add('visible');
+            speakResponse(list.split('\n')[0]); // Speak first one
+        }, 500);
+        return null;
+    }
+
+    if (lowerMsg.includes('cancel') && lowerMsg.includes('reminder')) {
+        // Try to extract what to cancel
+        const match = lowerMsg.match(/cancel.*?reminder.*?(?:for|about)?\s*(.+)/i);
+        if (match) {
+            const keyword = match[1].trim();
+            if (cancelReminder(keyword)) {
+                setTimeout(() => {
+                    chatResponse.textContent = `Cancelled reminder for "${keyword}".`;
+                    chatResponse.classList.add('visible');
+                }, 500);
+            }
+        }
+        return null;
+    }
+
+    // Keywords that trigger reminder parsing
+    const reminderKeywords = ['remind', 'reminder', 'alert', 'notify', 'pomodoro', 'focus', 'timer', 'every', 'at \\d'];
     const hasKeyword = reminderKeywords.some(k => new RegExp(k, 'i').test(message));
 
     if (!hasKeyword) return null;
@@ -1498,7 +1555,7 @@ async function checkForReminder(message) {
         if (res.ok) {
             const data = await res.json();
             if (data.isReminder && data.task && data.minutesFromNow > 0) {
-                return addReminder(data.task, data.minutesFromNow);
+                return addReminder(data.task, data.minutesFromNow, data.recurring, data.intervalMinutes);
             }
         }
     } catch (e) {
@@ -1506,6 +1563,49 @@ async function checkForReminder(message) {
     }
 
     return null;
+}
+
+// ── Daily Briefing ───────────────────────────────────────────────
+async function showDailyBriefing() {
+    try {
+        // Get weather first
+        const weatherRes = await fetch('/api/weather');
+        let weatherInfo = '';
+        if (weatherRes.ok) {
+            const w = await weatherRes.json();
+            weatherInfo = `Weather: ${w.temp}°F, ${w.desc}.`;
+        }
+
+        // Get active reminders
+        const activeReminders = reminders.filter(r => !r.notified);
+        const reminderInfo = activeReminders.length > 0
+            ? `You have ${activeReminders.length} reminder${activeReminders.length > 1 ? 's' : ''} set.`
+            : 'No reminders set.';
+
+        // Ask Zen for a briefing
+        const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: `Give me a brief morning briefing. ${weatherInfo} ${reminderInfo} Be warm and encouraging for the day ahead.`
+            })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            chatResponse.textContent = data.response;
+            chatResponse.classList.add('visible');
+            speakResponse(data.response);
+            state.coreFlash = 2.5;
+
+            clearTimeout(responseTimeout);
+            responseTimeout = setTimeout(() => {
+                chatResponse.classList.remove('visible');
+            }, 15000);
+        }
+    } catch (e) {
+        console.log('Briefing failed:', e);
+    }
 }
 
 // Check connection on page load
