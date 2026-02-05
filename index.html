@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Zen Sanctuary - The Reset</title>
+    <title>Zen Sanctuary</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -169,6 +169,53 @@
             #voice-btn { width: 36px; height: 36px; }
         }
 
+        /* ── Desktop Enhancements ─────────────────────────────────── */
+        @media (min-width: 769px) {
+            #chat-container {
+                padding: 30px;
+                padding-bottom: 40px;
+            }
+            #chat-response {
+                max-width: 550px;
+                font-size: 16px;
+                padding: 18px 24px;
+                margin-bottom: 20px;
+            }
+            #chat-input-wrapper {
+                max-width: 480px;
+            }
+            #chat-input {
+                font-size: 16px;
+                padding: 14px 20px;
+            }
+            #chat-send {
+                padding: 12px 20px;
+                font-size: 15px;
+            }
+            #voice-btn {
+                width: 44px;
+                height: 44px;
+            }
+            #voice-btn svg {
+                width: 20px;
+                height: 20px;
+            }
+        }
+
+        /* ── Large Desktop / Ultrawide ────────────────────────────── */
+        @media (min-width: 1200px) {
+            #chat-container {
+                padding: 40px;
+                padding-bottom: 50px;
+            }
+            #chat-response {
+                max-width: 600px;
+            }
+            #chat-input-wrapper {
+                max-width: 520px;
+            }
+        }
+
         /* ── Connection Status ─────────────────────────────────────── */
         #zen-status {
             position: fixed;
@@ -288,15 +335,37 @@ function resize() {
     state.dpr = Math.min(window.devicePixelRatio || 1, 2);
     state.w = window.innerWidth;
     state.h = window.innerHeight;
-    state.cx = state.w / 2;
-    state.cy = state.h / 2;
     state.isMobile = state.w < 768;
+
+    // Calculate available space accounting for chat UI at bottom
+    const chatHeight = state.isMobile ? 120 : 160;
+    const availableHeight = state.h - chatHeight;
+
+    // Center the clock in the available space (above chat)
+    state.cx = state.w / 2;
+    state.cy = availableHeight / 2;
+
     canvas.width = state.w * state.dpr;
     canvas.height = state.h * state.dpr;
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
-    state.baseSize = Math.min(state.w, state.h);
+
+    // Use the smaller of width or available height for proportional sizing
+    state.baseSize = Math.min(state.w, availableHeight);
+
+    // Scale clock based on screen type
+    let clockScale;
+    if (state.isMobile) {
+        clockScale = 0.40;
+    } else if (state.w >= 1200) {
+        // Large desktop - slightly larger clock
+        clockScale = 0.38;
+    } else {
+        // Regular desktop
+        clockScale = 0.36;
+    }
+
     state.innerRadius = state.baseSize * 0.08;
-    state.maxClockRadius = state.baseSize * (state.isMobile ? 0.42 : 0.40);
+    state.maxClockRadius = state.baseSize * clockScale;
 
     // Rebuild rings preserving glow state
     const oldGlows = minuteRings.map(r => r.glow);
@@ -1058,13 +1127,17 @@ function loop(timestamp) {
         const ampm = theme.h < 12 ? 'am' : 'pm';
         const timeStr = `${h12}:${mPad} ${ampm}`;
 
+        // Position just below the hour dots, scaled for screen size
+        const labelOffset = state.isMobile ? baseSize * 0.12 : baseSize * 0.10;
+        const fontSize = state.isMobile ? baseSize * 0.055 : baseSize * 0.04;
+
         ctx.save();
         ctx.globalAlpha = Math.min(state.ghostAlpha, 0.6);
         ctx.fillStyle = "#fff";
-        ctx.font = `200 ${baseSize * (state.isMobile ? 0.055 : 0.05)}px system-ui, sans-serif`;
+        ctx.font = `200 ${fontSize}px system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(timeStr, cx, cy + maxClockRadius + baseSize * 0.1);
+        ctx.fillText(timeStr, cx, cy + maxClockRadius + labelOffset);
         ctx.restore();
     }
 

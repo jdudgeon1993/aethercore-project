@@ -1,6 +1,6 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * VERSION: 4.0.0 - Full Features
+ * VERSION: 4.1.0 - Desktop Layout Polish
  */
 
 import 'dotenv/config';
@@ -19,7 +19,7 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const WEATHER_KEY = process.env.OPENWEATHER_API_KEY;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || 'Nashville';
 
-console.log('🚀 Initializing Zen Sanctuary [v4.0 Full Features]...');
+console.log('🚀 Initializing Zen Sanctuary [v4.1 Desktop Polish]...');
 console.log('📍 Weather:', WEATHER_KEY ? 'Configured' : 'Not configured');
 console.log('🏙️  Default city:', DEFAULT_CITY);
 
