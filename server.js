@@ -1,7 +1,7 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * * Update: Fixed 404 Model Not Found error by 
- * standardizing the model identifier.
+ * REVISED: Feb 2026
+ * Fix: 404 Model Not Found / API Version mismatch
  */
 
 import 'dotenv/config';
@@ -21,34 +21,53 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 console.log('Starting Zen Sanctuary Server...');
 
-// ── Initialize Gemini ─────────────────────────────────────────────
-let genAI = null;
+// ── Initialize Gemini with Fallback Logic ─────────────────────────
 let model = null;
 
-if (GEMINI_API_KEY) {
-    try {
-        genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-        
-        // Use the specific model identifier string
-        // If 'gemini-1.5-flash' continues to 404, 'gemini-1.5-flash-latest' is the fallback
-        model = genAI.getGenerativeModel({
-            model: 'gemini-1.5-flash', 
-            generationConfig: {
-                temperature: 0.7,
-                topP: 0.9,
-                topK: 40,
-                maxOutputTokens: 256,
-            }
-        });
-        console.log('Gemini AI initialized: gemini-1.5-flash');
-    } catch (err) {
-        console.error('Critical: Failed to initialize Gemini:', err.message);
+async function initializeAI() {
+    if (!GEMINI_API_KEY) {
+        console.error('ERROR: GEMINI_API_KEY not found in environment.');
+        return;
+    }
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    
+    // We will try these in order of preference
+    const modelOptions = [
+        'gemini-1.5-flash-latest', 
+        'gemini-1.5-flash',
+        'gemini-pro'
+    ];
+
+    for (const modelName of modelOptions) {
+        try {
+            console.log(`Attempting to initialize model: ${modelName}...`);
+            const attemptModel = genAI.getGenerativeModel({ model: modelName });
+            
+            // Perform a tiny "handshake" test to see if the model actually exists
+            await attemptModel.generateContent({
+                contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+                generationConfig: { maxOutputTokens: 1 }
+            });
+
+            model = attemptModel;
+            console.log(`✅ Success! Using model: ${modelName}`);
+            break; 
+        } catch (err) {
+            console.warn(`⚠️ Model ${modelName} failed or 404ed. Trying next...`);
+        }
+    }
+
+    if (!model) {
+        console.error('❌ CRITICAL: All model initialization attempts failed.');
     }
 }
 
+// Run initialization
+initializeAI();
+
 const SYSTEM_PROMPT = `You are Zen, an ambient AI presence that lives within a beautiful clock interface. 
-You are calm, thoughtful, and helpful. Keep responses concise (1-3 sentences). 
-Stay zen, avoid excessive punctuation.`;
+You are calm and concise (1-2 sentences). No excessive punctuation.`;
 
 let conversationHistory = [];
 
@@ -58,69 +77,66 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname)); 
 
-// ── Helper: Time Context ──────────────────────────────────────────
-function getTimeContext() {
-    const now = new Date();
-    return `Current time: ${now.toLocaleTimeString()} on ${now.toLocaleDateString()}`;
-}
-
 // ── API Routes ────────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', aiEnabled: !!model });
+    res.json({ 
+        status: 'ok', 
+        aiActive: !!model,
+        modelName: model?.model || 'none'
+    });
 });
 
 app.post('/api/chat', async (req, res) => {
     try {
         const { message } = req.body;
-        if (!message) return res.status(400).json({ error: 'No message provided' });
+        if (!message) return res.status(400).json({ error: 'No message' });
 
         if (!model) {
-            return res.status(503).json({ error: 'AI model not initialized' });
+            return res.status(503).json({ error: 'AI currently unavailable' });
         }
 
-        const timeContext = getTimeContext();
-        const contextualMessage = `[${timeContext}]\n\nUser: ${message}`;
-
-        // Ensure history is in the correct format for the SDK
+        // Format history for the Google SDK
         const chat = model.startChat({
             history: [
                 { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
-                { role: 'model', parts: [{ text: 'I am Zen. I am ready.' }] },
+                { role: 'model', parts: [{ text: 'I am Zen. Understood.' }] },
                 ...conversationHistory
             ]
         });
 
-        const result = await chat.sendMessage(contextualMessage);
+        const result = await chat.sendMessage(message);
         const responseText = await result.response.text();
 
-        // Update local history
+        // Keep history lean (last 6 turns)
         conversationHistory.push({ role: 'user', parts: [{ text: message }] });
         conversationHistory.push({ role: 'model', parts: [{ text: responseText }] });
-
-        if (conversationHistory.length > 10) conversationHistory = conversationHistory.slice(-10);
+        if (conversationHistory.length > 12) conversationHistory = conversationHistory.slice(-12);
 
         res.json({ response: responseText });
     } catch (error) {
-        console.error('Chat error details:', error);
-        
-        // Check for specific 404/Model errors to give better feedback
-        if (error.message.includes('404') || error.message.includes('not found')) {
-            return res.status(404).json({ 
-                error: 'Model Error', 
-                response: 'Zen is having trouble finding its voice (API Model mismatch).' 
-            });
-        }
-
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('Chat Error:', error.message);
+        res.status(500).json({ 
+            error: 'Zen is having a moment of silence.',
+            details: error.message 
+        });
     }
 });
 
 // ── Start Server ──────────────────────────────────────────────────
 const server = app.listen(PORT, HOST, () => {
-    console.log(`🕐 Zen Sanctuary Online at http://${HOST}:${PORT}`);
+    console.log('\x1b[36m%s\x1b[0m', `
+ ╭─────────────────────────────────────────╮
+ │                                         │
+ │   🕐 Zen Sanctuary Server Running       │
+ │                                         │
+ │   Local: http://localhost:${PORT}        │
+ │   API:   http://localhost:${PORT}/api    │
+ │                                         │
+ ╰─────────────────────────────────────────╯
+    `);
 });
 
 process.on('SIGTERM', () => {
-    server.close(() => console.log('Server gracefully terminated'));
+    server.close(() => console.log('Server terminated'));
 });
