@@ -1324,7 +1324,8 @@ async function showGreeting() {
 }
 
 async function sendMessage(spokenMessage = null) {
-    const message = spokenMessage || chatInput.value.trim();
+    // Only use spokenMessage if it's actually a string (not an Event object from click handlers)
+    const message = (typeof spokenMessage === 'string' && spokenMessage) ? spokenMessage : chatInput.value.trim();
     if (!message || isWaiting) return;
 
     isWaiting = true;
@@ -1409,7 +1410,7 @@ async function sendMessage(spokenMessage = null) {
 }
 
 // Event listeners
-chatSend.addEventListener('click', sendMessage);
+chatSend.addEventListener('click', () => sendMessage());
 chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
