@@ -1,6 +1,6 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * VERSION: 4.2.0 - Always Listening Mode
+ * VERSION: 4.3.0 - Google Search + Code Execution
  */
 
 import 'dotenv/config';
@@ -19,7 +19,7 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const WEATHER_KEY = process.env.OPENWEATHER_API_KEY;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || 'Nashville';
 
-console.log('🚀 Initializing Zen Sanctuary [v4.2 Always Listening]...');
+console.log('🚀 Initializing Zen Sanctuary [v4.3 Search + Code]...');
 console.log('🔑 Gemini API Key:', API_KEY ? `Configured (${API_KEY.substring(0, 8)}...)` : '❌ MISSING');
 console.log('📍 Weather:', WEATHER_KEY ? 'Configured' : 'Not configured');
 console.log('🏙️  Default city:', DEFAULT_CITY);
@@ -28,12 +28,20 @@ let model = null;
 let activeName = "gemini-2.0-flash";
 let initError = null;
 
-// Initialize model without test calls (saves API quota)
+// Initialize model with Google Search and Code Execution tools
 if (API_KEY) {
     try {
         const genAI = new GoogleGenerativeAI(API_KEY);
-        model = genAI.getGenerativeModel({ model: activeName });
+        model = genAI.getGenerativeModel({
+            model: activeName,
+            tools: [
+                { googleSearch: {} },      // Web search for current info
+                { codeExecution: {} }      // Math, calculations, data processing
+            ]
+        });
         console.log('✅ AI Model ready:', activeName);
+        console.log('🔍 Google Search: Enabled');
+        console.log('🧮 Code Execution: Enabled');
     } catch (e) {
         initError = e.message;
         console.error('❌ AI Model init failed:', e.message);
@@ -52,20 +60,23 @@ app.use(express.static(__dirname));
 const PROMPT = `You are Zen, a calm ambient AI assistant living within a beautiful clock interface. Keep responses to 2-3 sentences max.
 
 YOUR CAPABILITIES (you CAN do all of these):
+- Web Search: You can search the internet for current information - news, sports scores, stock prices, events, facts.
+- Calculations: You can execute code for math, conversions, and data processing.
 - Weather: You can check current weather. When weather data appears in brackets, use it naturally.
 - Reminders: You CAN set reminders! Users can say "remind me to X in Y minutes" or "remind me at 3pm to X". Confirm warmly when they set one.
 - Voice: Users can speak to you (mic button) and you speak responses aloud.
-- Time: You ARE the clock - you always know the current time.
+- Time: You know the current time - it's provided in brackets with each message. Use it for timezone conversions.
 - Pomodoro: You can start focus timers ("start a pomodoro" or "25 minute focus session").
-- Conversation: You can discuss any topic thoughtfully.
+- Conversation: You can discuss any topic thoughtfully and search for current info when needed.
 
 YOUR PERSONALITY:
 - Calm, warm, and zen-like
 - Concise but helpful
 - Poetic when describing weather
-- Never say you "can't" do reminders, weather, or voice - you CAN.
+- When asked factual questions, search for accurate answers rather than guessing
+- Never say you "can't" do something - you have real capabilities now.
 
-When users ask about your capabilities, be confident about what you can do.`;
+When users ask about current events, news, or facts - search for the answer. Be confident and informed.`;
 
 let history = [];
 
@@ -122,7 +133,12 @@ app.get('/api/health', (req, res) => {
         apiKeySet: !!API_KEY,
         initError: initError,
         weather: !!WEATHER_KEY,
-        city: DEFAULT_CITY
+        city: DEFAULT_CITY,
+        features: {
+            googleSearch: true,
+            codeExecution: true,
+            conversationHistory: 20
+        }
     });
 });
 
@@ -176,7 +192,7 @@ app.post('/api/chat', async (req, res) => {
         console.log('✅ Chat response:', text.substring(0, 50));
 
         history.push({ role: 'user', parts: [{ text: message }] }, { role: 'model', parts: [{ text: text }] });
-        if (history.length > 8) history = history.slice(-8);
+        if (history.length > 20) history = history.slice(-20);  // Keep more context for better conversations
 
         res.json({ response: text });
     } catch (e) {
