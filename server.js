@@ -144,6 +144,7 @@ app.post('/api/chat', async (req, res) => {
     try {
         if (!model) return res.status(503).json({ error: 'AI Offline' });
         const { message } = req.body;
+        if (!message) return res.status(400).json({ error: 'No message' });
 
         // Add weather context if it's a weather question
         let contextMsg = message;
