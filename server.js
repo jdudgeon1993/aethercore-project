@@ -21,22 +21,36 @@ const __dirname = dirname(__filename);
 const PORT = process.env.PORT || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+// Log startup info for debugging
+console.log('Starting Zen Sanctuary Server...');
+console.log('PORT:', PORT);
+console.log('GEMINI_API_KEY:', GEMINI_API_KEY ? `Set (${GEMINI_API_KEY.slice(0, 8)}...)` : 'NOT SET');
+
+// Don't crash if API key is missing - let health check report it
+let apiKeyMissing = false;
 if (!GEMINI_API_KEY) {
-    console.error('ERROR: GEMINI_API_KEY not found in .env file');
-    process.exit(1);
+    console.error('WARNING: GEMINI_API_KEY not found in environment variables');
+    console.error('AI features will be disabled until the key is configured');
+    apiKeyMissing = true;
 }
 
 // ── Initialize Gemini ─────────────────────────────────────────────
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
-    generationConfig: {
-        temperature: 0.7,
-        topP: 0.9,
-        topK: 40,
-        maxOutputTokens: 256, // Keep responses concise
-    }
-});
+let genAI = null;
+let model = null;
+
+if (GEMINI_API_KEY) {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    model = genAI.getGenerativeModel({
+        model: 'gemini-1.5-flash',
+        generationConfig: {
+            temperature: 0.7,
+            topP: 0.9,
+            topK: 40,
+            maxOutputTokens: 256, // Keep responses concise
+        }
+    });
+    console.log('Gemini AI initialized successfully');
+}
 
 // System prompt that defines the AI's personality
 const SYSTEM_PROMPT = `You are Zen, an ambient AI presence that lives within a beautiful clock interface. You are calm, thoughtful, and helpful.
@@ -84,9 +98,17 @@ function getTimeContext() {
 
 // ── API Routes ────────────────────────────────────────────────────
 
-// Health check
+// Health check with diagnostics
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString() });
+    res.json({
+        status: apiKeyMissing ? 'degraded' : 'ok',
+        aiEnabled: !apiKeyMissing,
+        time: new Date().toISOString(),
+        config: {
+            port: PORT,
+            geminiKey: GEMINI_API_KEY ? 'configured' : 'missing'
+        }
+    });
 });
 
 // Chat endpoint
@@ -96,6 +118,14 @@ app.post('/api/chat', async (req, res) => {
 
         if (!message || typeof message !== 'string') {
             return res.status(400).json({ error: 'Message is required' });
+        }
+
+        // Check if AI is configured
+        if (!model) {
+            return res.status(503).json({
+                error: 'AI not configured',
+                response: 'Zen is not yet awakened. Please configure the GEMINI_API_KEY in Railway environment variables.'
+            });
         }
 
         // Build the prompt with context
