@@ -1,6 +1,6 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * VERSION: 4.3.0 - Google Search + Code Execution
+ * VERSION: 4.3.0 - Google Search
  */
 
 import 'dotenv/config';
@@ -28,20 +28,18 @@ let model = null;
 let activeName = "gemini-2.0-flash";
 let initError = null;
 
-// Initialize model with Google Search and Code Execution tools
+// Initialize model with Google Search grounding
 if (API_KEY) {
     try {
         const genAI = new GoogleGenerativeAI(API_KEY);
         model = genAI.getGenerativeModel({
             model: activeName,
             tools: [
-                { googleSearch: {} },      // Web search for current info
-                { codeExecution: {} }      // Math, calculations, data processing
+                { googleSearch: {} }  // Web search for current info
             ]
         });
         console.log('✅ AI Model ready:', activeName);
         console.log('🔍 Google Search: Enabled');
-        console.log('🧮 Code Execution: Enabled');
     } catch (e) {
         initError = e.message;
         console.error('❌ AI Model init failed:', e.message);
@@ -61,7 +59,6 @@ const PROMPT = `You are Zen, a calm ambient AI assistant living within a beautif
 
 YOUR CAPABILITIES (you CAN do all of these):
 - Web Search: You can search the internet for current information - news, sports scores, stock prices, events, facts.
-- Calculations: You can execute code for math, conversions, and data processing.
 - Weather: You can check current weather. When weather data appears in brackets, use it naturally.
 - Reminders: You CAN set reminders! Users can say "remind me to X in Y minutes" or "remind me at 3pm to X". Confirm warmly when they set one.
 - Voice: Users can speak to you (mic button) and you speak responses aloud.
@@ -136,7 +133,6 @@ app.get('/api/health', (req, res) => {
         city: DEFAULT_CITY,
         features: {
             googleSearch: true,
-            codeExecution: true,
             conversationHistory: 20
         }
     });
