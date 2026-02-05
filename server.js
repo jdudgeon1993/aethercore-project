@@ -1,7 +1,6 @@
 /**
  * Zen Sanctuary - AI Clock Server
- * VERSION: 2.0.0 - Diagnostic Mode
- * Updates: Aggressive Error Logging & Resilient Handshake
+ * VERSION: 3.0.0 - Stable Force
  */
 
 import 'dotenv/config';
@@ -14,129 +13,90 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// ── Configuration ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
 const HOST = '0.0.0.0'; 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const API_KEY = process.env.GEMINI_API_KEY;
 
-console.log('🚀 Starting Zen Sanctuary [Diagnostic Mode]...');
+console.log('🚀 Initializing Zen Sanctuary [v3.0 Stable]...');
 
-// ── Initialize Gemini with Deep Diagnostics ───────────────────────
 let model = null;
-let activeModelName = "none";
+let activeName = "none";
 
-async function initializeAI() {
-    if (!GEMINI_API_KEY) {
-        console.error('❌ ERROR: GEMINI_API_KEY is missing from environment variables.');
-        return;
-    }
+async function bootAI() {
+    if (!API_KEY) return console.error('❌ Missing GEMINI_API_KEY');
 
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    // We force the 'v1' stable version to avoid v1beta 404s
+    const genAI = new GoogleGenerativeAI(API_KEY);
     
-    // Ordered list of models to attempt
-    const modelOptions = [
+    // Updated model list: trying 2.0/latest aliases first
+    const candidates = [
         'gemini-1.5-flash',
-        'gemini-1.5-flash-latest', 
+        'gemini-2.0-flash', 
+        'gemini-flash-latest',
         'gemini-1.5-pro'
     ];
 
-    for (const name of modelOptions) {
+    for (const name of candidates) {
         try {
-            console.log(`🔍 Testing Model: ${name}...`);
-            const testModel = genAI.getGenerativeModel({ model: name });
+            console.log(`📡 Handshake attempt: ${name}...`);
+            // Attempt to get the model specifically from the stable v1 path
+            const testModel = genAI.getGenerativeModel({ model: name }, { apiVersion: 'v1' });
             
-            // The "Handshake" - A tiny request to verify API access
             const test = await testModel.generateContent({
-                contents: [{ role: 'user', parts: [{ text: 'h' }] }],
+                contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
                 generationConfig: { maxOutputTokens: 1 }
             });
 
-            // If we reach here, the model is valid and active
             model = testModel;
-            activeModelName = name;
-            console.log(`✅ SUCCESS: Connected to ${name}`);
+            activeName = name;
+            console.log(`✅ CONNECTION ESTABLISHED: ${name}`);
             break; 
         } catch (err) {
-            console.error(`⚠️  FAILED: ${name}`);
-            // AGGRESSIVE LOGGING: Dig into the Google error object
-            if (err.response) {
-                console.error('   -> Status:', err.status);
-                console.error('   -> Details:', JSON.stringify(err.response, null, 2));
-            } else {
-                console.error('   -> Message:', err.message);
-            }
+            console.warn(`⚠️  ${name} unavailable: ${err.message}`);
         }
     }
 
-    if (!model) {
-        console.error('🚨 CRITICAL: All API handshake attempts failed. Check Google Cloud Quotas/Billing.');
-    }
+    if (!model) console.error('🚨 HANDSHAKE FAILED: Please check Google Cloud Project "Generative Language API" status.');
 }
 
-// Kick off initialization
-initializeAI();
+bootAI();
 
-const SYSTEM_PROMPT = `You are Zen, an ambient AI. Calm, brief (1-2 sentences).`;
-let conversationHistory = [];
-
-// ── Express Setup ─────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname)); 
 
-// ── API Routes ────────────────────────────────────────────────────
+// System prompt remains lean
+const PROMPT = "You are Zen, a calm ambient AI. Max 2 sentences.";
+let history = [];
 
 app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        aiActive: !!model,
-        activeModel: activeModelName,
-        timestamp: new Date().toISOString()
-    });
+    res.json({ status: 'ok', active: !!model, model: activeName });
 });
 
 app.post('/api/chat', async (req, res) => {
     try {
+        if (!model) return res.status(503).json({ error: 'AI Offline' });
         const { message } = req.body;
-        if (!message) return res.status(400).json({ error: 'No message' });
-
-        if (!model) {
-            return res.status(503).json({ error: 'AI not initialized' });
-        }
 
         const chat = model.startChat({
             history: [
-                { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
-                { role: 'model', parts: [{ text: 'I am Zen.' }] },
-                ...conversationHistory
+                { role: 'user', parts: [{ text: PROMPT }] },
+                { role: 'model', parts: [{ text: 'Understood.' }] },
+                ...history
             ]
         });
 
         const result = await chat.sendMessage(message);
-        const responseText = result.response.text();
+        const text = result.response.text();
 
-        conversationHistory.push({ role: 'user', parts: [{ text: message }] });
-        conversationHistory.push({ role: 'model', parts: [{ text: responseText }] });
-        if (conversationHistory.length > 10) conversationHistory = conversationHistory.slice(-10);
+        history.push({ role: 'user', parts: [{ text: message }] }, { role: 'model', parts: [{ text: text }] });
+        if (history.length > 8) history = history.slice(-8);
 
-        res.json({ response: responseText });
-    } catch (error) {
-        console.error('❌ CHAT ERROR:', error.message);
-        res.status(500).json({ error: 'Chat failed', diagnostics: error.message });
+        res.json({ response: text });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
-// ── Start Server ──────────────────────────────────────────────────
-const server = app.listen(PORT, HOST, () => {
-    console.log(`
- ╭─────────────────────────────────────────╮
- │   🕐 Zen Sanctuary Online               │
- │   Model: ${activeModelName}             │
- ╰─────────────────────────────────────────╯
-    `);
-});
-
-process.on('SIGTERM', () => {
-    server.close(() => console.log('Server Closed'));
-});
+app.listen(PORT, HOST, () => console.log(`🕐 Zen Sanctuary Online on Port ${PORT}`));
