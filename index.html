@@ -1297,12 +1297,16 @@ async function checkConnection(attempt = 1) {
 async function showGreeting() {
     // Get a greeting from Zen
     try {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
         const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: 'Say a brief, warm greeting (one sentence max). Mention the current time naturally.',
-                clientTime: new Date().toISOString()
+                clientTime: `${timeStr} on ${dateStr}`
             })
         });
 
@@ -1348,10 +1352,14 @@ async function sendMessage(spokenMessage = null) {
     checkForReminder(message);
 
     try {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
         const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, clientTime: new Date().toISOString() })
+            body: JSON.stringify({ message, clientTime: `${timeStr} on ${dateStr}` })
         });
 
         clearTimeout(wakingTimeout);
@@ -2040,12 +2048,16 @@ async function showDailyBriefing() {
             : 'No reminders set.';
 
         // Ask Zen for a briefing
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
         const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: `Give me a brief morning briefing. ${weatherInfo} ${reminderInfo} Be warm and encouraging for the day ahead.`,
-                clientTime: new Date().toISOString()
+                clientTime: `${timeStr} on ${dateStr}`
             })
         });
 

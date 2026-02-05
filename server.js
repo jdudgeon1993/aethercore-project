@@ -151,11 +151,10 @@ app.post('/api/chat', async (req, res) => {
         // Build context with time and weather
         let contextMsg = message;
 
-        // Add current time context (use client time if provided, else server time)
-        const now = clientTime ? new Date(clientTime) : new Date();
-        const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-        contextMsg += `\n[Current time: ${timeStr} on ${dateStr}]`;
+        // Add current time context (client sends pre-formatted local time)
+        if (clientTime) {
+            contextMsg += `\n[Current time: ${clientTime}]`;
+        }
 
         // Add weather context if it's a weather question
         if (isWeatherQuestion(message)) {
