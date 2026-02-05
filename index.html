@@ -1226,6 +1226,9 @@ async function sendMessage() {
     chatResponse.textContent = '...';
     chatResponse.classList.add('visible', 'thinking');
 
+    // Check if this is a reminder request (in parallel with chat)
+    checkForReminder(message);
+
     try {
         const res = await fetch('/api/chat', {
             method: 'POST',
@@ -1411,6 +1414,98 @@ if (SpeechRecognition) {
     // Speech Recognition not supported
     voiceBtn.disabled = true;
     voiceBtn.title = 'Voice input not supported in this browser';
+}
+
+// ── Reminders System ─────────────────────────────────────────────
+let reminders = JSON.parse(localStorage.getItem('zenReminders') || '[]');
+
+// Request notification permission
+if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+}
+
+function saveReminders() {
+    localStorage.setItem('zenReminders', JSON.stringify(reminders));
+}
+
+function addReminder(task, minutesFromNow) {
+    const reminder = {
+        id: Date.now(),
+        task,
+        triggerAt: Date.now() + (minutesFromNow * 60 * 1000),
+        notified: false
+    };
+    reminders.push(reminder);
+    saveReminders();
+    return reminder;
+}
+
+function checkReminders() {
+    const now = Date.now();
+    let updated = false;
+
+    reminders.forEach(r => {
+        if (!r.notified && now >= r.triggerAt) {
+            r.notified = true;
+            updated = true;
+
+            // Show notification
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification('Zen Reminder', {
+                    body: r.task,
+                    icon: '/favicon.ico',
+                    tag: 'zen-reminder-' + r.id
+                });
+            }
+
+            // Also show in chat and speak
+            chatResponse.textContent = `Reminder: ${r.task}`;
+            chatResponse.classList.add('visible');
+            speakResponse(`Reminder: ${r.task}`);
+            state.coreFlash = 3.0;
+
+            clearTimeout(responseTimeout);
+            responseTimeout = setTimeout(() => {
+                chatResponse.classList.remove('visible');
+            }, 10000);
+        }
+    });
+
+    // Clean up old notified reminders (older than 1 hour)
+    const oneHourAgo = now - 3600000;
+    reminders = reminders.filter(r => !r.notified || r.triggerAt > oneHourAgo);
+
+    if (updated) saveReminders();
+}
+
+// Check reminders every 10 seconds
+setInterval(checkReminders, 10000);
+
+// Parse potential reminder from message
+async function checkForReminder(message) {
+    const reminderKeywords = ['remind', 'reminder', 'alert', 'notify', 'in \\d+ minute'];
+    const hasKeyword = reminderKeywords.some(k => new RegExp(k, 'i').test(message));
+
+    if (!hasKeyword) return null;
+
+    try {
+        const res = await fetch('/api/parse-reminder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            if (data.isReminder && data.task && data.minutesFromNow > 0) {
+                return addReminder(data.task, data.minutesFromNow);
+            }
+        }
+    } catch (e) {
+        console.log('Reminder parse failed:', e);
+    }
+
+    return null;
 }
 
 // Check connection on page load
