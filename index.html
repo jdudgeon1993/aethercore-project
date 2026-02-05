@@ -1557,24 +1557,28 @@ let recognition = null;
 let isListening = false;
 let longPressVoiceTimer = null;
 
-// Wake words that trigger Zen
-const WAKE_WORDS = ['hey zen', 'okay zen', 'ok zen', 'hey zen,', 'zen,', 'zen '];
-
-function extractCommand(transcript) {
+// Wake word detection - flexible matching for speech recognition variations
+function detectWakeWord(transcript) {
     const lower = transcript.toLowerCase().trim();
 
-    // Check for wake words and extract the command after them
-    for (const wake of WAKE_WORDS) {
-        const idx = lower.indexOf(wake);
-        if (idx !== -1) {
-            const command = transcript.slice(idx + wake.length).trim();
-            return command || null;
-        }
-    }
+    // Common ways speech recognition hears "Hey Zen"
+    const wakePatterns = [
+        /\b(hey|hay|he|hi)\s*(zen|zenn|then|zen,|zen\.)/i,
+        /\b(okay|ok|o\.?k\.?)\s*(zen|zenn|then)/i,
+        /^(zen|zenn)\s*[,.]?\s*/i,  // Starting with just "Zen"
+        /\bhey\s*,?\s*zen/i,
+        /\bhazen\b/i,               // Often heard as one word
+        /\bheyzen\b/i,
+    ];
 
-    // If just "zen" at the very start, take the rest as command
-    if (lower.startsWith('zen ') || lower.startsWith('zen,')) {
-        return transcript.slice(4).trim();
+    for (const pattern of wakePatterns) {
+        const match = lower.match(pattern);
+        if (match) {
+            // Extract everything after the wake word
+            const afterWake = lower.slice(match.index + match[0].length).trim();
+            console.log('Wake pattern matched:', match[0], '| Command:', afterWake);
+            return afterWake || null;
+        }
     }
 
     return null;
@@ -1637,16 +1641,33 @@ if (SpeechRecognition) {
             const fullText = interimTranscript || finalTranscript;
             chatInput.value = fullText;
 
+            // Check interim results for early wake word detection (visual feedback)
+            if (interimTranscript) {
+                const earlyDetect = detectWakeWord(interimTranscript);
+                if (earlyDetect !== null) {
+                    // Show we heard the wake word
+                    voiceBtn.style.background = 'rgba(74, 222, 128, 0.3)';
+                }
+            }
+
             if (finalTranscript) {
-                const command = extractCommand(finalTranscript);
+                console.log('Final transcript:', finalTranscript);
+                const command = detectWakeWord(finalTranscript);
+
                 if (command && command.length > 2) {
                     console.log('Wake word detected! Command:', command);
                     state.coreFlash = 2.0; // Visual feedback
                     chatInput.value = command;
+                    voiceBtn.style.background = ''; // Reset button
                     sendMessage(command);
-                } else if (command === null) {
+                } else if (command === '') {
+                    // Wake word heard but no command yet - prompt user
+                    chatInput.placeholder = 'Listening for your command...';
+                    voiceBtn.style.background = '';
+                } else {
                     // No wake word found - clear and keep listening
                     chatInput.value = '';
+                    voiceBtn.style.background = '';
                 }
             }
         } else {
