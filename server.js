@@ -141,7 +141,10 @@ app.post('/api/chat', async (req, res) => {
             return res.status(503).json({ error: 'AI Offline - Model not initialized' });
         }
         const { message } = req.body;
-        if (!message) return res.status(400).json({ error: 'No message' });
+        if (!message || typeof message !== 'string') {
+            console.error('❌ Invalid message:', typeof message, message);
+            return res.status(400).json({ error: 'No message or invalid format' });
+        }
 
         console.log('💬 Chat request:', message.substring(0, 50));
 
