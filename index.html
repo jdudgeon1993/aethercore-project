@@ -118,11 +118,55 @@
             cursor: not-allowed;
         }
 
+        /* ── Voice Button ─────────────────────────────────────────────── */
+        #voice-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            margin-right: 4px;
+            color: rgba(255, 255, 255, 0.7);
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #voice-btn:hover {
+            background: rgba(255, 255, 255, 0.18);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        #voice-btn.listening {
+            background: rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+            animation: pulse-mic 1.5s ease-in-out infinite;
+        }
+
+        #voice-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        #voice-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        @keyframes pulse-mic {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
         @media (max-width: 480px) {
             #chat-container { padding: 12px; }
             #chat-response { font-size: 14px; padding: 12px 16px; }
             #chat-input { font-size: 14px; padding: 10px 14px; }
             #chat-send { padding: 8px 12px; font-size: 13px; }
+            #voice-btn { width: 36px; height: 36px; }
         }
 
         /* ── Connection Status ─────────────────────────────────────── */
@@ -196,6 +240,9 @@
     <div id="chat-container">
         <div id="chat-response"></div>
         <div id="chat-input-wrapper">
+            <button id="voice-btn" title="Voice input">
+                <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1 1.93c-3.94-.49-7-3.85-7-7.93h2c0 3.31 2.69 6 6 6s6-2.69 6-6h2c0 4.08-3.06 7.44-7 7.93V20h4v2H8v-2h4v-4.07z"/></svg>
+            </button>
             <input type="text" id="chat-input" placeholder="Ask Zen anything..." autocomplete="off">
             <button id="chat-send">Send</button>
         </div>
@@ -1153,6 +1200,9 @@ async function showGreeting() {
             chatResponse.classList.add('visible');
             state.coreFlash = 2.5;
 
+            // Speak the greeting
+            speakResponse(data.response);
+
             clearTimeout(responseTimeout);
             responseTimeout = setTimeout(() => {
                 chatResponse.classList.remove('visible');
@@ -1188,10 +1238,14 @@ async function sendMessage() {
         }
 
         const data = await res.json();
+        const responseText = data.response || 'No response received.';
 
         // Display response
         chatResponse.classList.remove('thinking');
-        chatResponse.textContent = data.response || 'No response received.';
+        chatResponse.textContent = responseText;
+
+        // Speak the response
+        speakResponse(responseText);
 
         // Clear input on success
         chatInput.value = '';
@@ -1244,6 +1298,120 @@ chatResponse.addEventListener('click', () => {
     chatResponse.classList.remove('visible');
     clearTimeout(responseTimeout);
 });
+
+// ── Voice Output (Text-to-Speech) ────────────────────────────────
+const synth = window.speechSynthesis;
+let zenVoice = null;
+let voiceEnabled = true;
+
+// Find a calm, pleasant voice
+function loadVoices() {
+    const voices = synth.getVoices();
+    // Prefer: Samantha (Mac), Google UK English Female, or any female en voice
+    zenVoice = voices.find(v => v.name.includes('Samantha')) ||
+               voices.find(v => v.name.includes('Google UK English Female')) ||
+               voices.find(v => v.name.includes('Female') && v.lang.startsWith('en')) ||
+               voices.find(v => v.lang.startsWith('en'));
+}
+
+if (synth) {
+    loadVoices();
+    synth.onvoiceschanged = loadVoices;
+}
+
+function speakResponse(text) {
+    if (!synth || !voiceEnabled || !text) return;
+
+    // Cancel any ongoing speech
+    synth.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.voice = zenVoice;
+    utterance.rate = 0.9;  // Slightly slower for zen feel
+    utterance.pitch = 1.0;
+    utterance.volume = 0.8;
+
+    synth.speak(utterance);
+}
+
+// ── Voice Input (Web Speech API) ─────────────────────────────────
+const voiceBtn = document.getElementById('voice-btn');
+let recognition = null;
+let isListening = false;
+
+// Check if Speech Recognition is supported
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (SpeechRecognition) {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+        isListening = true;
+        voiceBtn.classList.add('listening');
+        chatInput.placeholder = 'Listening...';
+    };
+
+    recognition.onend = () => {
+        isListening = false;
+        voiceBtn.classList.remove('listening');
+        chatInput.placeholder = 'Ask Zen anything...';
+    };
+
+    recognition.onresult = (event) => {
+        let finalTranscript = '';
+        let interimTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalTranscript += transcript;
+            } else {
+                interimTranscript += transcript;
+            }
+        }
+
+        // Show interim results in input
+        if (interimTranscript) {
+            chatInput.value = interimTranscript;
+        }
+
+        // When we have a final result, send it
+        if (finalTranscript) {
+            chatInput.value = finalTranscript;
+            sendMessage();
+        }
+    };
+
+    recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        isListening = false;
+        voiceBtn.classList.remove('listening');
+        chatInput.placeholder = 'Ask Zen anything...';
+
+        if (event.error === 'not-allowed') {
+            chatResponse.textContent = 'Microphone access denied. Please allow microphone access to use voice input.';
+            chatResponse.classList.add('visible');
+            setTimeout(() => chatResponse.classList.remove('visible'), 5000);
+        }
+    };
+
+    voiceBtn.addEventListener('click', () => {
+        if (isWaiting) return;
+
+        if (isListening) {
+            recognition.stop();
+        } else {
+            recognition.start();
+        }
+    });
+} else {
+    // Speech Recognition not supported
+    voiceBtn.disabled = true;
+    voiceBtn.title = 'Voice input not supported in this browser';
+}
 
 // Check connection on page load
 setTimeout(checkConnection, 1000);
