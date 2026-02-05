@@ -140,7 +140,7 @@ app.post('/api/chat', async (req, res) => {
             console.error('❌ Chat failed: Model not initialized');
             return res.status(503).json({ error: 'AI Offline - Model not initialized' });
         }
-        const { message } = req.body;
+        const { message, clientTime } = req.body;
         if (!message || typeof message !== 'string') {
             console.error('❌ Invalid message:', typeof message, message);
             return res.status(400).json({ error: 'No message or invalid format' });
@@ -148,11 +148,19 @@ app.post('/api/chat', async (req, res) => {
 
         console.log('💬 Chat request:', message.substring(0, 50));
 
-        // Add weather context if it's a weather question
+        // Build context with time and weather
         let contextMsg = message;
+
+        // Add current time context (use client time if provided, else server time)
+        const now = clientTime ? new Date(clientTime) : new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        contextMsg += `\n[Current time: ${timeStr} on ${dateStr}]`;
+
+        // Add weather context if it's a weather question
         if (isWeatherQuestion(message)) {
             const weather = await getWeather();
-            contextMsg = message + formatWeather(weather);
+            contextMsg += formatWeather(weather);
         }
 
         const chat = model.startChat({
