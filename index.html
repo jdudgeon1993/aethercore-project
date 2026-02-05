@@ -1476,7 +1476,49 @@ if (synth) {
     setTimeout(loadVoices, 1000);
 }
 
-let currentKeepAlive = null;
+let speechQueue = [];
+let isSpeaking = false;
+
+// Split text into speakable chunks (sentences)
+function splitIntoSentences(text) {
+    // Split on sentence endings, keeping the punctuation
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    return sentences.map(s => s.trim()).filter(s => s.length > 0);
+}
+
+function speakNextInQueue() {
+    if (speechQueue.length === 0) {
+        isSpeaking = false;
+        console.log('TTS queue complete');
+        return;
+    }
+
+    isSpeaking = true;
+    const sentence = speechQueue.shift();
+
+    const utterance = new SpeechSynthesisUtterance(sentence);
+
+    if (zenVoice) {
+        utterance.voice = zenVoice;
+    }
+
+    utterance.rate = 0.92;
+    utterance.pitch = 1.0;
+    utterance.volume = 0.85;
+
+    utterance.onend = () => {
+        // Small pause between sentences for natural flow
+        setTimeout(speakNextInQueue, 150);
+    };
+
+    utterance.onerror = (e) => {
+        console.error('TTS error:', e.error);
+        // Try to continue with next sentence
+        setTimeout(speakNextInQueue, 100);
+    };
+
+    synth.speak(utterance);
+}
 
 function speakResponse(text) {
     if (!synth || !voiceEnabled || !text) {
@@ -1486,65 +1528,27 @@ function speakResponse(text) {
 
     console.log('Speaking:', text.substring(0, 50) + '...');
 
-    // Clear any previous keep-alive interval
-    if (currentKeepAlive) {
-        clearInterval(currentKeepAlive);
-        currentKeepAlive = null;
-    }
-
-    // Cancel any ongoing speech
+    // Cancel any ongoing speech and clear queue
     synth.cancel();
+    speechQueue = [];
+    isSpeaking = false;
 
     // Try to load voices if not loaded yet
     if (!voicesLoaded) {
         loadVoices();
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
-
-    if (zenVoice) {
-        utterance.voice = zenVoice;
-    }
-
-    utterance.rate = 0.92;  // Slightly slower for zen feel
-    utterance.pitch = 1.0;
-    utterance.volume = 0.85;
-
-    utterance.onstart = () => console.log('TTS started');
-    utterance.onend = () => {
-        console.log('TTS ended');
-        if (currentKeepAlive) {
-            clearInterval(currentKeepAlive);
-            currentKeepAlive = null;
-        }
-    };
-    utterance.onerror = (e) => {
-        console.error('TTS error:', e.error);
-        if (currentKeepAlive) {
-            clearInterval(currentKeepAlive);
-            currentKeepAlive = null;
-        }
-    };
-
-    // Mobile Safari workaround: need to speak immediately after user gesture
+    // Mobile Safari workaround
     if (synth.paused) {
         synth.resume();
     }
 
-    synth.speak(utterance);
+    // Split into sentences and queue them
+    const sentences = splitIntoSentences(text);
+    console.log(`TTS: ${sentences.length} sentences to speak`);
 
-    // Chrome bug workaround: speech synthesis stops after ~15 seconds
-    // Resume more frequently (every 5 seconds) to prevent cutoff
-    // Only pause/resume if actually speaking to avoid stutters
-    currentKeepAlive = setInterval(() => {
-        if (synth.speaking && !synth.paused) {
-            synth.pause();
-            synth.resume();
-        } else if (!synth.speaking) {
-            clearInterval(currentKeepAlive);
-            currentKeepAlive = null;
-        }
-    }, 5000);
+    speechQueue = sentences;
+    speakNextInQueue();
 }
 
 // ── Voice Input (Web Speech API) with Continuous Listening ───────
