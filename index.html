@@ -1097,14 +1097,21 @@ function setStatus(status, label) {
     }
 }
 
-async function checkConnection() {
-    setStatus('checking', 'Connecting...');
+async function checkConnection(attempt = 1) {
+    const maxAttempts = 3;
+    setStatus('checking', attempt > 1 ? `Waking Zen (${attempt}/${maxAttempts})...` : 'Connecting...');
 
     try {
+        // Longer timeout for Railway cold starts
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
         const res = await fetch('/api/health', {
             method: 'GET',
-            cache: 'no-store'
+            cache: 'no-store',
+            signal: controller.signal
         });
+        clearTimeout(timeout);
 
         if (res.ok) {
             const data = await res.json();
@@ -1119,9 +1126,15 @@ async function checkConnection() {
             throw new Error('Health check failed');
         }
     } catch (error) {
-        console.error('Connection check failed:', error);
-        isOnline = false;
-        setStatus('offline', 'Zen is sleeping');
+        console.error(`Connection check failed (attempt ${attempt}):`, error);
+
+        // Retry for cold starts
+        if (attempt < maxAttempts) {
+            setTimeout(() => checkConnection(attempt + 1), 2000);
+        } else {
+            isOnline = false;
+            setStatus('offline', 'Zen is sleeping');
+        }
     }
 }
 
