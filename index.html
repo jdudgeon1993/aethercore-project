@@ -1609,10 +1609,16 @@ function loadVoices() {
 
     voicesLoaded = true;
 
-    // Filter to English voices and sort by name
-    allVoices = voices
-        .filter(v => v.lang.startsWith('en'))
-        .sort((a, b) => a.name.localeCompare(b.name));
+    // Show ALL voices, sorted by language then name
+    allVoices = voices.sort((a, b) => {
+        // Prioritize English voices
+        const aEn = a.lang.startsWith('en') ? 0 : 1;
+        const bEn = b.lang.startsWith('en') ? 0 : 1;
+        if (aEn !== bEn) return aEn - bEn;
+        return a.name.localeCompare(b.name);
+    });
+
+    console.log('Loaded', allVoices.length, 'voices');
 
     // Try to restore saved voice
     if (savedVoiceName) {
@@ -1623,7 +1629,8 @@ function loadVoices() {
     if (!zenVoice) {
         zenVoice = allVoices.find(v => v.name.includes('Samantha')) ||
                    allVoices.find(v => v.name.includes('Google UK English Female')) ||
-                   allVoices.find(v => v.name.toLowerCase().includes('female')) ||
+                   allVoices.find(v => v.name.toLowerCase().includes('female') && v.lang.startsWith('en')) ||
+                   allVoices.find(v => v.lang.startsWith('en')) ||
                    allVoices[0];
     }
 
@@ -1670,13 +1677,26 @@ function selectVoice(voice) {
 }
 
 function previewVoice(voice) {
+    // Cancel any current speech
     synth.cancel();
-    const utterance = new SpeechSynthesisUtterance('Hello, I am Zen. How may I help you today?');
-    utterance.voice = voice;
-    utterance.rate = 0.92;
-    utterance.pitch = 1.0;
-    utterance.volume = 0.85;
-    synth.speak(utterance);
+
+    // Small delay after cancel to ensure it works
+    setTimeout(() => {
+        const previewText = `Hi, I'm ${voice.name.split(' ')[0]}. I can be Zen's voice.`;
+        console.log('Previewing voice:', voice.name, voice.lang);
+
+        const utterance = new SpeechSynthesisUtterance(previewText);
+        utterance.voice = voice;
+        utterance.rate = 0.92;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+
+        utterance.onstart = () => console.log('Preview started:', voice.name);
+        utterance.onend = () => console.log('Preview ended:', voice.name);
+        utterance.onerror = (e) => console.error('Preview error:', e);
+
+        synth.speak(utterance);
+    }, 100);
 }
 
 function openVoicePicker() {
