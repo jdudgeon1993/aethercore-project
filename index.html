@@ -1746,6 +1746,14 @@ function speakNextInQueue() {
     if (speechQueue.length === 0) {
         isSpeaking = false;
         console.log('TTS queue complete');
+
+        // Restart listening after Zen finishes speaking
+        if (alwaysListening && recognition && !isListening) {
+            console.log('Restarting recognition after TTS...');
+            setTimeout(() => {
+                restartRecognition();
+            }, 500);
+        }
         return;
     }
 
@@ -1843,37 +1851,69 @@ function detectWakeWord(transcript) {
 // Check if Speech Recognition is supported
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+// Robust restart function for always-listening mode
+function restartRecognition() {
+    if (!recognition || !alwaysListening) return;
+
+    // Don't restart while speaking or waiting for response
+    if (isSpeaking || isWaiting) {
+        console.log('Skipping restart - speaking:', isSpeaking, 'waiting:', isWaiting);
+        return;
+    }
+
+    try {
+        // Stop first if somehow still running
+        if (isListening) {
+            recognition.stop();
+        }
+
+        setTimeout(() => {
+            if (alwaysListening && !isListening && !isSpeaking && !isWaiting) {
+                console.log('Starting recognition...');
+                recognition.start();
+            }
+        }, 200);
+    } catch (e) {
+        console.log('Restart recognition error:', e.message);
+        // Try again in a moment
+        setTimeout(restartRecognition, 1000);
+    }
+}
+
 if (SpeechRecognition) {
     recognition = new SpeechRecognition();
     recognition.interimResults = true;
+    recognition.continuous = true;  // Keep listening until we stop it
     recognition.lang = 'en-US';
 
     recognition.onstart = () => {
         isListening = true;
         voiceBtn.classList.add('listening');
+        console.log('Recognition started - listening for wake word');
+
         if (alwaysListening) {
-            chatInput.placeholder = 'Say "Hey Zen" + command...';
+            chatInput.placeholder = '🎤 Say "Hey Zen" + command...';
+            // Brief visual pulse to show we're ready
+            voiceBtn.style.boxShadow = '0 0 20px rgba(96, 165, 250, 0.6)';
+            setTimeout(() => {
+                voiceBtn.style.boxShadow = '';
+            }, 500);
         } else {
             chatInput.placeholder = 'Listening...';
         }
     };
 
     recognition.onend = () => {
+        console.log('Recognition ended, alwaysListening:', alwaysListening, 'isWaiting:', isWaiting);
         isListening = false;
         voiceBtn.classList.remove('listening');
 
-        // In always-listening mode, restart recognition after a short pause
-        if (alwaysListening && !isWaiting) {
-            setTimeout(() => {
-                if (alwaysListening && !isListening) {
-                    try {
-                        recognition.start();
-                    } catch (e) {
-                        console.log('Recognition restart failed:', e);
-                    }
-                }
-            }, 300);
+        // In always-listening mode, restart recognition
+        if (alwaysListening && !isWaiting && !isSpeaking) {
+            setTimeout(restartRecognition, 300);
             chatInput.placeholder = 'Say "Hey Zen"...';
+        } else if (alwaysListening) {
+            chatInput.placeholder = 'Zen is thinking...';
         } else {
             chatInput.placeholder = 'Ask Zen anything...';
         }
@@ -1942,15 +1982,17 @@ if (SpeechRecognition) {
     recognition.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
 
-        // Don't stop always-listening on transient errors
-        if (event.error === 'no-speech' || event.error === 'aborted') {
-            if (alwaysListening) {
-                // Just restart
+        isListening = false;
+
+        // Handle transient errors - just restart in always-listening mode
+        if (event.error === 'no-speech' || event.error === 'aborted' || event.error === 'audio-capture') {
+            if (alwaysListening && !isWaiting && !isSpeaking) {
+                console.log('Transient error, restarting recognition...');
+                setTimeout(restartRecognition, 500);
                 return;
             }
         }
 
-        isListening = false;
         voiceBtn.classList.remove('listening');
 
         if (!alwaysListening) {
