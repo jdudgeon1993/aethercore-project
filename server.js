@@ -183,7 +183,14 @@ app.post('/api/chat', async (req, res) => {
         });
 
         const result = await chat.sendMessage(contextMsg);
-        const text = result.response.text();
+        let text = result.response.text();
+
+        // Clean up Google Search citation markers like [cite:none], [cite:1], etc.
+        text = text.replace(/\[cite:[^\]]*\]/gi, '').trim();
+        // Also clean up any leftover citation numbers like [1], [2]
+        text = text.replace(/\[\d+\]/g, '').trim();
+        // Clean up multiple spaces that might result
+        text = text.replace(/\s{2,}/g, ' ');
 
         console.log('✅ Chat response:', text.substring(0, 50));
 
