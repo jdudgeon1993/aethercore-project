@@ -1670,10 +1670,16 @@ function renderVoiceList() {
     });
 }
 
+// Get a voice by name from current voice list (voices can become stale)
+function getVoiceByName(name) {
+    const voices = synth.getVoices();
+    return voices.find(v => v.name === name) || null;
+}
+
 function selectVoice(voice) {
-    zenVoice = voice;
     localStorage.setItem('zenVoiceName', voice.name);
-    console.log('Voice selected:', voice.name);
+    zenVoice = voice;
+    console.log('Voice selected and saved:', voice.name);
 }
 
 function previewVoice(voice) {
@@ -1682,21 +1688,28 @@ function previewVoice(voice) {
 
     // Small delay after cancel to ensure it works
     setTimeout(() => {
+        // Get fresh voice reference
+        const freshVoice = getVoiceByName(voice.name);
+        if (!freshVoice) {
+            console.error('Voice not found:', voice.name);
+            return;
+        }
+
         const previewText = `Hi, I'm ${voice.name.split(' ')[0]}. I can be Zen's voice.`;
-        console.log('Previewing voice:', voice.name, voice.lang);
+        console.log('Previewing voice:', freshVoice.name, freshVoice.lang, freshVoice.voiceURI);
 
         const utterance = new SpeechSynthesisUtterance(previewText);
-        utterance.voice = voice;
+        utterance.voice = freshVoice;
         utterance.rate = 0.92;
         utterance.pitch = 1.0;
         utterance.volume = 1.0;
 
-        utterance.onstart = () => console.log('Preview started:', voice.name);
-        utterance.onend = () => console.log('Preview ended:', voice.name);
-        utterance.onerror = (e) => console.error('Preview error:', e);
+        utterance.onstart = () => console.log('Preview started:', freshVoice.name);
+        utterance.onend = () => console.log('Preview ended:', freshVoice.name);
+        utterance.onerror = (e) => console.error('Preview error:', e.error);
 
         synth.speak(utterance);
-    }, 100);
+    }, 150);
 }
 
 function openVoicePicker() {
@@ -1762,8 +1775,12 @@ function speakNextInQueue() {
 
     const utterance = new SpeechSynthesisUtterance(sentence);
 
-    if (zenVoice) {
-        utterance.voice = zenVoice;
+    // Get fresh voice reference (use saved name or zenVoice)
+    const savedName = localStorage.getItem('zenVoiceName');
+    const voiceToUse = savedName ? getVoiceByName(savedName) : zenVoice;
+    if (voiceToUse) {
+        utterance.voice = voiceToUse;
+        console.log('Speaking with voice:', voiceToUse.name);
     }
 
     utterance.rate = 0.92;
