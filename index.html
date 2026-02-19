@@ -1765,7 +1765,14 @@ function loadVoices() {
     if (!synth) return;
 
     const voices = synth.getVoices();
-    console.log('Available voices:', voices.length);
+    console.log('🎤 loadVoices() count:', voices.length);
+
+    // DEBUG: Log all voices so we can see what Chrome actually has
+    if (voices.length > 0 && voices.length < 30) {
+        voices.forEach((v, i) => {
+            console.log(`  [${i}] "${v.name}" | ${v.lang} | local:${v.localService}`);
+        });
+    }
 
     if (voices.length === 0) return;
 
@@ -1844,14 +1851,17 @@ function getVoiceByName(name) {
 }
 
 function selectVoice(voice) {
+    console.log('🎯 selectVoice() called with:', voice.name, '| local:', voice.localService);
+
     // Save the voice name (not the object which can become stale)
     localStorage.setItem('zenVoiceName', voice.name);
+    console.log('   localStorage set to:', voice.name);
 
     // Get a fresh reference from the current voice list
     const freshVoices = synth.getVoices();
+    console.log('   freshVoices count:', freshVoices.length);
     zenVoice = freshVoices.find(v => v.name === voice.name) || voice;
-
-    console.log('Voice selected and saved:', voice.name);
+    console.log('   zenVoice now:', zenVoice?.name || 'null');
 
     // Speak a confirmation so user hears the new voice immediately
     synth.cancel();
@@ -1863,6 +1873,8 @@ function selectVoice(voice) {
 }
 
 function previewVoice(voice) {
+    console.log('👁️ previewVoice() called for:', voice.name);
+
     // Cancel any current speech and clear queue
     synth.cancel();
     speechQueue = [];
@@ -1872,19 +1884,23 @@ function previewVoice(voice) {
     setTimeout(() => {
         // Force refresh voice list and get fresh reference
         const freshVoices = synth.getVoices();
+        console.log('   freshVoices count after 300ms:', freshVoices.length);
         const freshVoice = freshVoices.find(v => v.name === voice.name);
 
         if (!freshVoice) {
-            console.error('Voice not found:', voice.name);
+            console.error('   ✗ Voice not found in fresh list:', voice.name);
             // Try to use any voice as fallback
             const fallback = freshVoices[0];
-            if (!fallback) return;
-            console.log('Using fallback voice:', fallback.name);
+            if (!fallback) {
+                console.error('   ✗ No fallback voice available!');
+                return;
+            }
+            console.log('   Using fallback voice:', fallback.name);
         }
 
         const voiceToUse = freshVoice || freshVoices[0];
         const previewText = `Hi, I'm ${voiceToUse.name.split(' ')[0]}. I can be Zen's voice.`;
-        console.log('Previewing voice:', voiceToUse.name, voiceToUse.lang);
+        console.log('   ✓ Previewing:', voiceToUse.name, '| local:', voiceToUse.localService);
 
         const utterance = new SpeechSynthesisUtterance(previewText);
         // CRITICAL: Set voice FIRST before any other properties (Chrome bug workaround)
@@ -1893,11 +1909,12 @@ function previewVoice(voice) {
         utterance.pitch = 1.0;
         utterance.volume = 1.0;
 
-        utterance.onstart = () => console.log('Preview started:', voiceToUse.name);
-        utterance.onend = () => console.log('Preview ended:', voiceToUse.name);
-        utterance.onerror = (e) => console.error('Preview error:', e.error);
+        utterance.onstart = () => console.log('   Preview started:', voiceToUse.name);
+        utterance.onend = () => console.log('   Preview ended:', voiceToUse.name);
+        utterance.onerror = (e) => console.error('   Preview error:', e.error, e);
 
         synth.speak(utterance);
+        console.log('   synth.speak() called');
     }, 300);
 }
 
@@ -1981,21 +1998,31 @@ function speakNextInQueue() {
     const freshVoices = liveVoices.length > 0 ? liveVoices : allVoices;
     let voiceToUse = null;
 
+    console.log('🔊 speakNextInQueue DEBUG:');
+    console.log('   savedName:', savedName);
+    console.log('   liveVoices.length:', liveVoices.length);
+    console.log('   freshVoices.length:', freshVoices.length);
+
     if (savedName) {
         voiceToUse = freshVoices.find(v => v.name === savedName);
+        console.log('   found by savedName:', voiceToUse?.name || 'NOT FOUND');
     }
     if (!voiceToUse && zenVoice) {
         voiceToUse = freshVoices.find(v => v.name === zenVoice.name);
+        console.log('   found by zenVoice:', voiceToUse?.name || 'NOT FOUND');
     }
     if (!voiceToUse) {
         // Final fallback: first English voice or just first voice
         voiceToUse = freshVoices.find(v => v.lang.startsWith('en')) || freshVoices[0];
+        console.log('   using fallback:', voiceToUse?.name || 'NONE');
     }
 
     // CRITICAL: Set voice FIRST before any other properties (Chrome bug workaround)
     if (voiceToUse) {
         utterance.voice = voiceToUse;
-        console.log('Speaking with voice:', voiceToUse.name);
+        console.log('   ✓ utterance.voice SET TO:', voiceToUse.name, '| local:', voiceToUse.localService);
+    } else {
+        console.log('   ✗ NO VOICE SET - will use browser default');
     }
 
     utterance.rate = 0.95;
