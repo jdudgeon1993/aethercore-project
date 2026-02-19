@@ -19,7 +19,7 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const WEATHER_KEY = process.env.OPENWEATHER_API_KEY;
 const DEFAULT_CITY = process.env.DEFAULT_CITY || 'Nashville';
 
-console.log('🚀 Initializing Zen Sanctuary [v4.3 Search + Code]...');
+console.log('🚀 Initializing Zen Sanctuary [v4.4 Conversational]...');
 console.log('🔑 Gemini API Key:', API_KEY ? `Configured (${API_KEY.substring(0, 8)}...)` : '❌ MISSING');
 console.log('📍 Weather:', WEATHER_KEY ? 'Configured' : 'Not configured');
 console.log('🏙️  Default city:', DEFAULT_CITY);

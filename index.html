@@ -1909,7 +1909,7 @@ if (SpeechRecognition) {
         console.log('Recognition started - listening for wake word');
 
         if (alwaysListening) {
-            chatInput.placeholder = '🎤 Say "Hey Zen" + command...';
+            chatInput.placeholder = '🎤 Speak to Zen...';
             // Brief visual pulse to show we're ready
             voiceBtn.style.boxShadow = '0 0 20px rgba(96, 165, 250, 0.6)';
             setTimeout(() => {
@@ -1950,38 +1950,26 @@ if (SpeechRecognition) {
         }
 
         if (alwaysListening) {
-            // In always-listening mode, check for wake word
-            const fullText = interimTranscript || finalTranscript;
-            chatInput.value = fullText;
-
-            // Check interim results for early wake word detection (visual feedback)
+            // Conversational mode - show what's being heard in real time
             if (interimTranscript) {
-                const earlyDetect = detectWakeWord(interimTranscript);
-                if (earlyDetect !== null) {
-                    // Show we heard the wake word
-                    voiceBtn.style.background = 'rgba(74, 222, 128, 0.3)';
-                }
+                chatInput.value = interimTranscript;
             }
 
             if (finalTranscript) {
-                console.log('Final transcript:', finalTranscript);
-                const command = detectWakeWord(finalTranscript);
+                const said = finalTranscript.trim();
+                console.log('Heard:', said);
 
-                if (command && command.length > 2) {
-                    console.log('Wake word detected! Command:', command);
-                    state.coreFlash = 2.0; // Visual feedback
-                    chatInput.value = command;
-                    voiceBtn.style.background = ''; // Reset button
-                    sendMessage(command);
-                } else if (command === '') {
-                    // Wake word heard but no command yet - prompt user
-                    chatInput.placeholder = 'Listening for your command...';
-                    voiceBtn.style.background = '';
-                } else {
-                    // No wake word found - clear and keep listening
+                // Ignore very short/noise fragments (less than 3 words)
+                const wordCount = said.split(/\s+/).filter(w => w.length > 0).length;
+                if (wordCount < 2) {
+                    console.log('Too short, ignoring:', said);
                     chatInput.value = '';
-                    voiceBtn.style.background = '';
+                    return;
                 }
+
+                chatInput.value = said;
+                state.coreFlash = 2.0;
+                sendMessage(said);
             }
         } else {
             // Push-to-talk mode: send everything
@@ -2030,8 +2018,8 @@ if (SpeechRecognition) {
         alwaysListening = true;
         voiceBtn.classList.add('always-on');
         recognition.continuous = true;
-        setStatus('listening', 'Listening for "Hey Zen"...', true);
-        chatInput.placeholder = 'Say "Hey Zen"...';
+        setStatus('listening', 'Conversation mode — just speak', true);
+        chatInput.placeholder = '🎤 Speak to Zen...';
 
         // Start listening
         if (!isListening) {
@@ -2042,8 +2030,7 @@ if (SpeechRecognition) {
             }
         }
 
-        // Announce the mode
-        speakResponse('Always listening mode enabled. Say "Hey Zen" followed by your command.');
+        speakResponse("I'm listening. Just speak naturally.");
     }
 
     function disableAlwaysListening() {
@@ -2203,10 +2190,33 @@ function cancelReminder(keyword) {
     return reminders.length < before;
 }
 
+function cancelAllReminders() {
+    const count = reminders.filter(r => !r.notified).length;
+    reminders = [];
+    saveReminders();
+    return count;
+}
+
+function cancelReminderByIndex(index) {
+    const active = reminders.filter(r => !r.notified);
+    if (index < 1 || index > active.length) return false;
+    const toRemove = active[index - 1];
+    reminders = reminders.filter(r => r.id !== toRemove.id);
+    saveReminders();
+    return toRemove.task;
+}
+
 function triggerReminder(r) {
     console.log('Triggering reminder:', r.task);
 
-    const reminderText = `Reminder: ${r.task}`;
+    const reminderText = `Time for: ${r.task}`;
+
+    // Stop whatever Zen is doing - reminder takes priority
+    if (synth) {
+        synth.cancel();
+        speechQueue = [];
+        isSpeaking = false;
+    }
 
     // Try browser notification first
     let notificationShown = false;
@@ -2320,27 +2330,68 @@ async function checkForReminder(message) {
     const lowerMsg = message.toLowerCase();
 
     // Handle special commands locally
-    if (lowerMsg.includes('what reminder') || lowerMsg.includes('list reminder') || lowerMsg.includes('my reminder')) {
-        const list = listReminders();
+    if (lowerMsg.includes('what reminder') || lowerMsg.includes('list reminder') || lowerMsg.includes('my reminder') || lowerMsg.includes('show reminder')) {
+        const active = reminders.filter(r => !r.notified);
+        if (active.length === 0) {
+            const msg = 'You have no active reminders.';
+            setTimeout(() => {
+                chatResponse.textContent = msg;
+                chatResponse.classList.add('visible');
+                speakResponse(msg);
+            }, 500);
+        } else {
+            const list = active.map((r, i) => {
+                const mins = Math.round((r.triggerAt - Date.now()) / 60000);
+                const recurText = r.recurring ? ' (daily)' : '';
+                return `${i + 1}. ${r.task} — in ${mins} min${recurText}`;
+            }).join('\n');
+            setTimeout(() => {
+                chatResponse.textContent = list;
+                chatResponse.classList.add('visible');
+                speakResponse(`You have ${active.length} reminder${active.length > 1 ? 's' : ''}. ${active.map(r => r.task).join(', ')}.`);
+            }, 500);
+        }
+        return null;
+    }
+
+    // Delete ALL reminders
+    const deleteAllPattern = /(delete|clear|cancel|remove)\s+all\s+(reminders?|timers?)/i;
+    if (deleteAllPattern.test(lowerMsg)) {
+        const count = cancelAllReminders();
+        const msg = count > 0 ? `Done. Cleared ${count} reminder${count > 1 ? 's' : ''}.` : 'No reminders to clear.';
         setTimeout(() => {
-            chatResponse.textContent = list;
+            chatResponse.textContent = msg;
             chatResponse.classList.add('visible');
-            speakResponse(list.split('\n')[0]); // Speak first one
+            speakResponse(msg);
         }, 500);
         return null;
     }
 
-    if (lowerMsg.includes('cancel') && lowerMsg.includes('reminder')) {
-        // Try to extract what to cancel
-        const match = lowerMsg.match(/cancel.*?reminder.*?(?:for|about)?\s*(.+)/i);
-        if (match) {
-            const keyword = match[1].trim();
-            if (cancelReminder(keyword)) {
-                setTimeout(() => {
-                    chatResponse.textContent = `Cancelled reminder for "${keyword}".`;
-                    chatResponse.classList.add('visible');
-                }, 500);
-            }
+    // Delete by number: "delete reminder 2" / "cancel reminder 1"
+    const deleteNumMatch = lowerMsg.match(/(delete|cancel|remove)\s+(?:reminder\s+)?#?(\d+)/i);
+    if (deleteNumMatch) {
+        const idx = parseInt(deleteNumMatch[2]);
+        const deleted = cancelReminderByIndex(idx);
+        const msg = deleted ? `Removed reminder: ${deleted}.` : `No reminder found at number ${idx}.`;
+        setTimeout(() => {
+            chatResponse.textContent = msg;
+            chatResponse.classList.add('visible');
+            speakResponse(msg);
+        }, 500);
+        return null;
+    }
+
+    // Delete by keyword: "cancel reminder about water" / "delete the water reminder"
+    const deleteKeywordMatch = lowerMsg.match(/(delete|cancel|remove|stop)\s+(?:the\s+)?(?:reminder\s+)?(?:for|about|to)?\s*(.+?)(?:\s+reminder)?$/i);
+    if (deleteKeywordMatch && (lowerMsg.includes('delete') || lowerMsg.includes('cancel') || lowerMsg.includes('remove') || lowerMsg.includes('stop')) && lowerMsg.includes('remind')) {
+        const keyword = deleteKeywordMatch[2].trim();
+        if (keyword && cancelReminder(keyword)) {
+            const msg = `Cancelled reminder for "${keyword}".`;
+            setTimeout(() => {
+                chatResponse.textContent = msg;
+                chatResponse.classList.add('visible');
+                speakResponse(msg);
+            }, 500);
         }
         return null;
     }
