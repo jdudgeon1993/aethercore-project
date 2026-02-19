@@ -1787,11 +1787,13 @@ function loadVoices() {
         zenVoice = allVoices.find(v => v.name === savedVoiceName);
     }
 
-    // Fallback to defaults if no saved voice
+    // Fallback to defaults if no saved voice.
+    // Prefer localService:true voices — Chrome often ignores cloud/remote ones.
     if (!zenVoice) {
-        zenVoice = allVoices.find(v => v.name.includes('Samantha')) ||
+        zenVoice = allVoices.find(v => v.name.includes('Samantha') && v.localService !== false) ||
+                   allVoices.find(v => v.name.includes('Samantha')) ||
                    allVoices.find(v => v.name.includes('Google UK English Female')) ||
-                   allVoices.find(v => v.name.toLowerCase().includes('female') && v.lang.startsWith('en')) ||
+                   allVoices.find(v => v.localService !== false && v.lang.startsWith('en-')) ||
                    allVoices.find(v => v.lang.startsWith('en')) ||
                    allVoices[0];
     }
@@ -1813,7 +1815,7 @@ function renderVoiceList() {
         option.innerHTML = `
             <div>
                 <div class="voice-name">${voice.name}</div>
-                <div class="voice-lang">${voice.lang}</div>
+                <div class="voice-lang">${voice.lang}${voice.localService === false ? ' · cloud' : ''}</div>
             </div>
             <button class="preview-btn">Preview</button>
         `;
@@ -1972,9 +1974,11 @@ function speakNextInQueue() {
 
     const utterance = new SpeechSynthesisUtterance(sentence);
 
-    // Get fresh voice reference - ALWAYS refresh from browser's current list
+    // Get fresh voice reference - ALWAYS refresh from browser's current list.
+    // Fall back to cached allVoices if Chrome returns empty post-cancel.
     const savedName = localStorage.getItem('zenVoiceName');
-    const freshVoices = synth.getVoices();
+    const liveVoices = synth.getVoices();
+    const freshVoices = liveVoices.length > 0 ? liveVoices : allVoices;
     let voiceToUse = null;
 
     if (savedName) {
@@ -2040,7 +2044,10 @@ function speakResponse(text) {
     console.log(`TTS: ${sentences.length} sentences to speak`);
 
     speechQueue = sentences;
-    speakNextInQueue();
+
+    // Chrome bug: synth.getVoices() returns stale/empty immediately after
+    // synth.cancel(). Wait one tick so Chrome stabilizes before we speak.
+    setTimeout(speakNextInQueue, 150);
 }
 
 // ── Voice Input (Web Speech API) with Continuous Listening ───────
