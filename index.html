@@ -1804,9 +1804,12 @@ function renderVoiceList() {
 
     voiceList.innerHTML = '';
 
+    const savedName = localStorage.getItem('zenVoiceName') || (zenVoice ? zenVoice.name : null);
+
     allVoices.forEach(voice => {
         const option = document.createElement('div');
-        option.className = 'voice-option' + (voice === zenVoice ? ' selected' : '');
+        const isSelected = voice.name === savedName;
+        option.className = 'voice-option' + (isSelected ? ' selected' : '');
         option.innerHTML = `
             <div>
                 <div class="voice-name">${voice.name}</div>
@@ -1839,42 +1842,74 @@ function getVoiceByName(name) {
 }
 
 function selectVoice(voice) {
+    // Save the voice name (not the object which can become stale)
     localStorage.setItem('zenVoiceName', voice.name);
-    zenVoice = voice;
+
+    // Get a fresh reference from the current voice list
+    const freshVoices = synth.getVoices();
+    zenVoice = freshVoices.find(v => v.name === voice.name) || voice;
+
     console.log('Voice selected and saved:', voice.name);
+
+    // Speak a confirmation so user hears the new voice immediately
+    synth.cancel();
+    speechQueue = [];
+    isSpeaking = false;
+    setTimeout(() => {
+        speakResponse("Voice updated.");
+    }, 200);
 }
 
 function previewVoice(voice) {
-    // Cancel any current speech
+    // Cancel any current speech and clear queue
     synth.cancel();
+    speechQueue = [];
+    isSpeaking = false;
 
-    // Small delay after cancel to ensure it works
+    // Longer delay after cancel - Chrome needs time to fully stop
     setTimeout(() => {
-        // Get fresh voice reference
-        const freshVoice = getVoiceByName(voice.name);
+        // Force refresh voice list and get fresh reference
+        const freshVoices = synth.getVoices();
+        const freshVoice = freshVoices.find(v => v.name === voice.name);
+
         if (!freshVoice) {
             console.error('Voice not found:', voice.name);
-            return;
+            // Try to use any voice as fallback
+            const fallback = freshVoices[0];
+            if (!fallback) return;
+            console.log('Using fallback voice:', fallback.name);
         }
 
-        const previewText = `Hi, I'm ${voice.name.split(' ')[0]}. I can be Zen's voice.`;
-        console.log('Previewing voice:', freshVoice.name, freshVoice.lang, freshVoice.voiceURI);
+        const voiceToUse = freshVoice || freshVoices[0];
+        const previewText = `Hi, I'm ${voiceToUse.name.split(' ')[0]}. I can be Zen's voice.`;
+        console.log('Previewing voice:', voiceToUse.name, voiceToUse.lang);
 
         const utterance = new SpeechSynthesisUtterance(previewText);
-        utterance.voice = freshVoice;
-        utterance.rate = 0.92;
+        // CRITICAL: Set voice FIRST before any other properties (Chrome bug workaround)
+        utterance.voice = voiceToUse;
+        utterance.rate = 0.95;
         utterance.pitch = 1.0;
         utterance.volume = 1.0;
 
-        utterance.onstart = () => console.log('Preview started:', freshVoice.name);
-        utterance.onend = () => console.log('Preview ended:', freshVoice.name);
+        utterance.onstart = () => console.log('Preview started:', voiceToUse.name);
+        utterance.onend = () => console.log('Preview ended:', voiceToUse.name);
         utterance.onerror = (e) => console.error('Preview error:', e.error);
 
         synth.speak(utterance);
-    }, 150);
+    }, 300);
 }
 
 function openVoicePicker() {
+    // Force refresh voice list before showing picker
+    const voices = synth.getVoices();
+    if (voices.length > 0) {
+        allVoices = voices.sort((a, b) => {
+            const aEn = a.lang.startsWith('en') ? 0 : 1;
+            const bEn = b.lang.startsWith('en') ? 0 : 1;
+            if (aEn !== bEn) return aEn - bEn;
+            return a.name.localeCompare(b.name);
+        });
+    }
     renderVoiceList();
     voicePicker.style.display = 'flex';
 }
@@ -1937,17 +1972,31 @@ function speakNextInQueue() {
 
     const utterance = new SpeechSynthesisUtterance(sentence);
 
-    // Get fresh voice reference (use saved name or zenVoice)
+    // Get fresh voice reference - ALWAYS refresh from browser's current list
     const savedName = localStorage.getItem('zenVoiceName');
-    const voiceToUse = savedName ? getVoiceByName(savedName) : zenVoice;
+    const freshVoices = synth.getVoices();
+    let voiceToUse = null;
+
+    if (savedName) {
+        voiceToUse = freshVoices.find(v => v.name === savedName);
+    }
+    if (!voiceToUse && zenVoice) {
+        voiceToUse = freshVoices.find(v => v.name === zenVoice.name);
+    }
+    if (!voiceToUse) {
+        // Final fallback: first English voice or just first voice
+        voiceToUse = freshVoices.find(v => v.lang.startsWith('en')) || freshVoices[0];
+    }
+
+    // CRITICAL: Set voice FIRST before any other properties (Chrome bug workaround)
     if (voiceToUse) {
         utterance.voice = voiceToUse;
         console.log('Speaking with voice:', voiceToUse.name);
     }
 
-    utterance.rate = 0.92;
+    utterance.rate = 0.95;
     utterance.pitch = 1.0;
-    utterance.volume = 0.85;
+    utterance.volume = 0.9;
 
     utterance.onend = () => {
         // Small pause between sentences for natural flow
